@@ -12,11 +12,14 @@
  *                  panel that touches `state` -- StateMachineViz in
  *                  particular -- has its own belt-and-suspenders guard too).
  *
- * Only fields the `fiat402:events` schema actually carries (requestId,
- * state, previousState, timestamp, meta.{paymentLinkId,razorpayPaymentId,
- * reason}) are used to derive what's shown -- see DecisionPanel's and
- * RawTrafficViewer's top-of-file comments for the fields that schema does
- * not carry and why they render as "not available" rather than fabricated.
+ * `fiat402:events` now optionally carries decision-layer fields
+ * (aiRecommendation/aiJustification/aiProvider/deterministicDecision/
+ * deterministicReason) on the "pending" transition event -- see
+ * apps/facilitator/src/ws.ts's FiatEvent and
+ * apps/facilitator/src/server.ts's settlePayment. deriveDecision below pulls
+ * those off the most recent "pending" event actually observed for the
+ * current request; RawTrafficViewer's top-of-file comment still applies for
+ * the raw header fields that schema does not carry.
  */
 
 import { useEffect, useState } from "react";
@@ -24,7 +27,7 @@ import { ConnectionIndicator, type ConnectionStatus } from "../components/Connec
 import { RawTrafficViewer } from "../components/RawTrafficViewer";
 import { UpiCollectCard } from "../components/UpiCollectCard";
 import { StateMachineViz } from "../components/StateMachineViz";
-import { DecisionPanel } from "../components/DecisionPanel";
+import { DecisionPanel, type DeterministicDecision, type AiAdvisory } from "../components/DecisionPanel";
 import { ReconciliationRecord, type ObservedTimestamps } from "../components/ReconciliationRecord";
 import { isFiatEventShape, isKnownState, type FiatEvent } from "../lib/events";
 
@@ -61,6 +64,41 @@ function deriveTimestamps(events: FiatEvent[]): ObservedTimestamps {
     }
   }
   return timestamps;
+}
+
+interface Decision {
+  deterministic: DeterministicDecision | null;
+  ai: AiAdvisory | null;
+}
+
+/**
+ * Pulls the decision-layer fields off the most recent "pending" event that
+ * carries them -- see apps/facilitator/src/server.ts's settlePayment, which
+ * attaches them only to the created->pending transition. Requests that were
+ * rejected before ever reaching "pending" (deterministic reject, AI
+ * hold-pending-review) never publish any event at all -- see
+ * DecisionPanel.tsx's top-of-file comment -- so there is nothing to derive
+ * for those, and both fields stay null.
+ */
+function deriveDecision(events: FiatEvent[]): Decision {
+  const decisionEvent = [...events].reverse().find(event => event.state === "pending" && event.aiRecommendation !== undefined);
+  if (!decisionEvent) return { deterministic: null, ai: null };
+
+  const deterministic: DeterministicDecision | null =
+    decisionEvent.deterministicDecision !== undefined
+      ? { allowed: decisionEvent.deterministicDecision === "allowed", reason: decisionEvent.deterministicReason }
+      : null;
+
+  const ai: AiAdvisory | null =
+    decisionEvent.aiRecommendation !== undefined
+      ? {
+          recommendation: decisionEvent.aiRecommendation,
+          justification: decisionEvent.aiJustification ?? "",
+          provider: decisionEvent.aiProvider ?? "",
+        }
+      : null;
+
+  return { deterministic, ai };
 }
 
 export default function DashboardPage() {
@@ -106,6 +144,7 @@ export default function DashboardPage() {
   const paymentLinkId = [...events].reverse().find(event => event.meta.paymentLinkId)?.meta.paymentLinkId ?? null;
   const razorpayPaymentId = [...events].reverse().find(event => event.meta.razorpayPaymentId)?.meta.razorpayPaymentId ?? null;
   const finalOutcome = current?.state === "settled" || current?.state === "failed" ? current.state : null;
+  const { deterministic, ai } = deriveDecision(events);
 
   return (
     <main className="mx-auto flex min-h-screen max-w-6xl flex-col gap-6 p-6">
@@ -120,15 +159,15 @@ export default function DashboardPage() {
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <StateMachineViz event={latestEvent} />
         <UpiCollectCard requestId={requestId} state={current?.state ?? null} paymentLinkId={paymentLinkId} />
-        <DecisionPanel requestId={requestId} deterministic={null} ai={null} />
+        <DecisionPanel requestId={requestId} deterministic={deterministic} ai={ai} />
         <ReconciliationRecord
           requestId={requestId}
           finalOutcome={finalOutcome}
           razorpayPaymentId={razorpayPaymentId}
           paymentLinkId={paymentLinkId}
           timestamps={deriveTimestamps(events)}
-          deterministic={null}
-          ai={null}
+          deterministic={deterministic}
+          ai={ai}
         />
       </div>
 

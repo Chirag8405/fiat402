@@ -8,10 +8,9 @@
  * index) key strings are constructed, per CLAUDE.md's "Redis key schema"
  * section: "Do not invent alternate key shapes in any module — import these
  * from packages/scheme-upi/src/state-machine.ts." Every key builder is
- * exported so other modules (webhook-handler.ts already predates this file
- * and keeps its own copies — see its top-of-file comment; Module 5b's
- * server.ts should import from here instead of redefining them) stay in
- * sync with this file rather than hand-rolling key strings.
+ * exported so other modules (apps/facilitator/src/razorpay/webhook-handler.ts
+ * and apps/facilitator/src/server.ts) import from here rather than
+ * hand-rolling key strings.
  *
  * Two keys are NOT in CLAUDE.md's Redis key schema section as written, but
  * are treated as part of the authoritative schema per this module's own
@@ -23,9 +22,9 @@
  *     written by webhook-handler.ts itself the first time it resolves a
  *     webhook via the paymentLinkId index (see that file's resolveRequestId
  *     for why: payment.captured/payment.failed payloads carry no
- *     payment_link_id). The key builder is defined here for a single source
- *     of truth on the key *shape*; webhook-handler.ts's own copy must stay
- *     byte-for-byte identical to paymentIdIndexKey below.
+ *     payment_link_id). The key builder is defined here as the single
+ *     source of truth on the key *shape*; webhook-handler.ts imports it
+ *     directly rather than keeping its own copy.
  *
  * Redis access is done exclusively through the `StateMachineRedisClient`
  * passed into every function — this file never instantiates a Redis client
@@ -94,12 +93,19 @@ export function requestPaymentLinkKey(requestId: string): string {
   return `req:${requestId}:paymentLinkId`;
 }
 
-/** Reverse index: Razorpay payment_link_id -> requestId. Must match webhook-handler.ts's private copy exactly. */
+/** Reverse index: Razorpay payment_link_id -> requestId. Imported directly by webhook-handler.ts. */
 export function paymentLinkIndexKey(paymentLinkId: string): string {
   return `paymentLinkId:${paymentLinkId}:requestId`;
 }
 
-/** Reverse index: Razorpay payment_id -> requestId. Must match webhook-handler.ts's private copy exactly. */
+/**
+ * Reverse index: Razorpay payment_id -> requestId. Self-populating cache,
+ * written by webhook-handler.ts the first time it resolves a webhook via
+ * paymentLinkIndexKey — Razorpay's payment.captured/payment.failed payloads
+ * carry no payment_link_id, so a later event for the same payment_id that
+ * arrives without one can still resolve via this cache. Imported directly
+ * by webhook-handler.ts.
+ */
 export function paymentIdIndexKey(paymentId: string): string {
   return `razorpayPaymentId:${paymentId}:requestId`;
 }
@@ -193,17 +199,29 @@ export async function recordPaymentLinkCreated(
 
 // --- Transition ---
 
+/** The optional, non-`meta` fields transitionState's `extra` parameter may merge into the published event. */
+export type TransitionExtra = Partial<
+  Pick<FiatEvent, "aiRecommendation" | "aiJustification" | "aiProvider" | "deterministicDecision" | "deterministicReason">
+>;
+
 /**
  * Transitions `requestId` to `newState`: updates `req:{requestId}:state`
  * (preserving its existing TTL via "KEEPTTL", exactly as webhook-handler.ts
  * already does for the same key) and publishes the transition on
  * `fiat402:events` via ./ws.ts's publishEvent. Returns the published event.
+ *
+ * `extra` merges optional decision-layer fields (aiRecommendation,
+ * deterministicDecision, etc. -- see ./ws.ts's FiatEvent) onto the published
+ * event's top level. It does not change this function's core transition
+ * logic (state read/write, KEEPTTL, publish) -- it's a passthrough so
+ * server.ts can attach that data to the "pending" transition specifically.
  */
 export async function transitionState(
   redis: StateMachineRedisClient,
   requestId: string,
   newState: RequestState,
   meta: Partial<FiatEvent["meta"]> = {},
+  extra: TransitionExtra = {},
 ): Promise<FiatEvent> {
   const previousState = await redis.get(requestStateKey(requestId));
   await redis.set(requestStateKey(requestId), newState, "KEEPTTL");
@@ -218,6 +236,7 @@ export async function transitionState(
       razorpayPaymentId: meta.razorpayPaymentId ?? null,
       reason: meta.reason ?? null,
     },
+    ...extra,
   };
 
   await publishEvent(redis, event);

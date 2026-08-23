@@ -38,6 +38,12 @@
 
 import type { Request, RequestHandler, Response } from "express";
 import { createHmac, timingSafeEqual } from "node:crypto";
+import {
+  requestStateKey,
+  paymentLinkIndexKey,
+  paymentIdIndexKey,
+} from "../../../../packages/scheme-upi/src/state-machine";
+import type { FiatEvent } from "../ws";
 
 /**
  * Minimal Redis client surface this module needs. Matches ioredis/node-redis
@@ -56,67 +62,10 @@ export interface WebhookRedisClient {
 
 type RequestState = "created" | "pending" | "approved" | "declined" | "expired" | "settled" | "failed";
 
-/** Pub/sub event schema, verbatim from CLAUDE.md's "Pub/sub event schema" section. */
-interface FiatEventsMessage {
-  requestId: string;
-  state: RequestState;
-  previousState: string | null;
-  timestamp: string;
-  meta: {
-    paymentLinkId: string | null;
-    razorpayPaymentId: string | null;
-    reason: string | null;
-  };
-}
-
 const EVENTS_CHANNEL = "fiat402:events";
 
-function requestStateKey(requestId: string): string {
-  return `req:${requestId}:state`;
-}
-
-/**
- * Reverse index: Razorpay payment_link_id -> requestId.
- *
- * NOT part of CLAUDE.md's Redis key schema as written — that section only
- * defines the forward direction (`req:{requestId}:paymentLinkId`, written
- * once a Payment Link is created). A webhook arrives keyed by
- * `payment_link_id` / `payment_id` with no requestId attached, so resolving
- * an inbound webhook back to a request requires this inverse lookup.
- *
- * This module has no dependency on Module 5a/5b (state-machine.ts /
- * server.ts) per this module's own spec, so it cannot define that key in the
- * single authoritative place CLAUDE.md calls for. Documenting the gap
- * explicitly here rather than silently assuming a name: whichever module
- * creates the Payment Link must write `paymentLinkId:{paymentLinkId}:requestId`
- * (this exact key) alongside `req:{requestId}:paymentLinkId` at creation
- * time, for this handler to resolve webhooks. Reconcile with
- * state-machine.ts once Module 5a exists.
- */
-function paymentLinkIndexKey(paymentLinkId: string): string {
-  return `paymentLinkId:${paymentLinkId}:requestId`;
-}
-
-/**
- * Reverse index: Razorpay payment_id -> requestId.
- *
- * Populated by this handler itself (not by any other module) the first time
- * it resolves a webhook to a requestId via `paymentLinkIndexKey`. Razorpay's
- * documented `payment.captured` / `payment.failed` payloads (confirmed by
- * fetching razorpay.com/docs/webhooks/payloads/payments/) do not carry a
- * payment_link_id field — only `payment_link.paid` does
- * (payload.payment_link.entity.id, confirmed from
- * razorpay.com/docs/webhooks/payment-links/). Since delivery order between
- * payment_link.paid and payment.captured is not guaranteed, this cache lets
- * a payment.captured/payment.failed event that arrives without a resolvable
- * payment_link_id still resolve, as long as some earlier event for the same
- * payment_id already populated it.
- */
-function paymentIdIndexKey(paymentId: string): string {
-  return `razorpayPaymentId:${paymentId}:requestId`;
-}
-
-/** Generous fixed TTL for the payment_id cache — see paymentIdIndexKey's comment.
+/** Generous fixed TTL for the payment_id cache — see packages/scheme-upi/src/state-machine.ts's
+ *  paymentIdIndexKey doc comment for why this cache exists.
  *  Not tied to maxTimeoutSeconds (unknown to this module); long enough to
  *  outlive any plausible webhook redelivery/out-of-order window. */
 const PAYMENT_ID_CACHE_TTL_SECONDS = 24 * 60 * 60;
@@ -195,10 +144,10 @@ async function publishTransition(
   requestId: string,
   state: RequestState,
   previousState: string | null,
-  meta: FiatEventsMessage["meta"],
+  meta: FiatEvent["meta"],
 ): Promise<void> {
   await redis.set(requestStateKey(requestId), state, "KEEPTTL");
-  const message: FiatEventsMessage = {
+  const message: FiatEvent = {
     requestId,
     state,
     previousState,

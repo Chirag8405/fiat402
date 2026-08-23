@@ -7,17 +7,18 @@
  * returns `{ isValid, invalidReason, extra: { aiRecommendation,
  * aiJustification, aiProvider } }`).
  *
- * That decision data is returned in the /verify HTTP response body -- it is
- * never published to `fiat402:events` (FiatEvent only carries
- * requestId/state/previousState/timestamp/meta.{paymentLinkId,
- * razorpayPaymentId,reason}; see apps/facilitator/src/server.ts's
- * settlePayment: the deterministic-reject and AI-hold-pending-review early
- * returns both happen before any transitionState/publishEvent call, so
- * those outcomes never reach the pub/sub channel this dashboard's SSE relay
- * subscribes to at all). Per this module's brief to build strictly against
- * that event shape, app/page.tsx has no live source for these fields and
- * passes `null` -- this panel renders a clear "not available on the live
- * event stream" state in that case rather than fabricating data.
+ * That decision data is also attached to the "pending" transition's
+ * FiatEvent (aiRecommendation/aiJustification/aiProvider/
+ * deterministicDecision/deterministicReason -- see
+ * apps/facilitator/src/ws.ts's FiatEvent and
+ * apps/facilitator/src/server.ts's settlePayment), so app/page.tsx derives
+ * it live from the event stream for any request that reaches "pending".
+ * A request rejected before "pending" (deterministic reject, or an
+ * AI hold/flag still waiting on the confirm-gate) never publishes an event
+ * at all -- those outcomes only ever appear in the /verify or /settle HTTP
+ * response body, never on `fiat402:events` -- so this panel still renders
+ * the "not available on the live event stream" state for those, rather than
+ * fabricating data.
  */
 
 import { EmptyState } from "./EmptyState";

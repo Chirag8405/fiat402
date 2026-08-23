@@ -321,6 +321,40 @@ describe("POST /settle — timeout", () => {
   }, 10000);
 });
 
+describe("x402Version validation", () => {
+  it("POST /verify rejects a paymentPayload with an unsupported x402Version", async () => {
+    await startServer();
+
+    const requirements = buildRequirements();
+    const payload = { ...buildPayload(requirements, "order-badversion-verify"), x402Version: 1 };
+
+    const res = await fetch(`${baseUrl}/verify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ x402Version: 1, paymentPayload: payload, paymentRequirements: requirements }),
+    });
+    const body = (await res.json()) as Record<string, unknown>;
+
+    expect(res.status).toBe(200);
+    expect(body).toEqual({ isValid: false, invalidReason: "unsupported x402Version" });
+    expect(fetchImplMock).not.toHaveBeenCalled();
+  });
+
+  it("POST /settle rejects a paymentPayload with an unsupported x402Version", async () => {
+    await startServer();
+
+    const requirements = buildRequirements();
+    const payload = { ...buildPayload(requirements, "order-badversion-settle"), x402Version: 1 };
+
+    const { status, body } = await postSettle(requirements, payload);
+
+    expect(status).toBe(200);
+    expect(body).toEqual({ success: false, errorReason: "unsupported x402Version", transaction: "", network: "upi:in" });
+    expect(fetchImplMock).not.toHaveBeenCalled();
+    expect(createUpiPaymentLinkMock).not.toHaveBeenCalled();
+  });
+});
+
 describe("POST /settle — concurrent requests for the same logical request", () => {
   it("only creates one Payment Link; the second call joins the existing resolution", async () => {
     createUpiPaymentLinkMock.mockResolvedValue({ ok: true, paymentLinkId: "plink_concurrent", shortUrl: "https://rzp.io/i/concurrent" });

@@ -9,16 +9,17 @@
  *
  * That full row lives in Postgres, written by writeReconciliationRecord --
  * it is not published to `fiat402:events`. What IS derivable purely from
- * the live event stream (per this module's brief to build against that
- * exact schema) is: requestId, razorpayPaymentId and paymentLinkId (from
- * meta), the final outcome (the terminal state itself), and a timestamp per
- * transition actually observed live (built up client-side in app/page.tsx
- * as events arrive -- these are real, not fabricated, since they're just
- * the `timestamp` field off each real event for this request). Fields this
- * dashboard cannot see live (deterministicDecision/deterministicReason,
- * aiRecommendation/aiJustification/aiProvider, txnRef, amountPaise, payTo)
- * are rendered as "not available on the live event stream" rather than
- * guessed at.
+ * the live event stream is: requestId, razorpayPaymentId and paymentLinkId
+ * (from meta), the final outcome (the terminal state itself), a timestamp
+ * per transition actually observed live (built up client-side in
+ * app/page.tsx as events arrive -- these are real, not fabricated, since
+ * they're just the `timestamp` field off each real event for this request),
+ * and -- for any request that reached "pending" -- deterministicDecision/
+ * deterministicReason and aiRecommendation (see apps/facilitator/src/ws.ts's
+ * FiatEvent, which now carries these on the "pending" transition event).
+ * Fields this dashboard genuinely cannot see live (txnRef, amountPaise,
+ * payTo) are rendered as "not available on the live event stream" rather
+ * than guessed at.
  */
 
 import { EmptyState } from "./EmptyState";

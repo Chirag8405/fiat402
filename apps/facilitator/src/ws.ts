@@ -37,6 +37,19 @@ export interface FiatEvent {
     razorpayPaymentId: string | null;
     reason: string | null;
   };
+  /**
+   * Optional decision-layer data, attached only to the "pending" transition
+   * event (see packages/scheme-upi/src/state-machine.ts's transitionState
+   * `extra` parameter and apps/facilitator/src/server.ts's settlePayment).
+   * Not part of CLAUDE.md's original pub/sub event schema -- added so the
+   * dashboard's DecisionPanel can render real deterministic/AI data instead
+   * of always showing "not available on the live event stream".
+   */
+  aiRecommendation?: "approve" | "hold" | "flag";
+  aiJustification?: string;
+  aiProvider?: string;
+  deterministicDecision?: "allowed" | "rejected";
+  deterministicReason?: string;
 }
 
 export const EVENTS_CHANNEL = "fiat402:events";

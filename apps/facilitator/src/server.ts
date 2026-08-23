@@ -31,6 +31,7 @@
 import "./load-env";
 
 import express, { type Express, type Request, type Response } from "express";
+import cors from "cors";
 import type { PaymentPayload, PaymentRequirements } from "@x402/core/types";
 import { checkDeterministicPolicy, type VelocityRedisClient } from "./policy/deterministic";
 import { getAdvisoryRecommendation } from "./policy/ai-advisory";
@@ -163,6 +164,13 @@ export async function verifyPayment(
   paymentRequirements: PaymentRequirements,
   ctx: FacilitatorCallContext = {},
 ): Promise<VerifyResponseBody> {
+  // Per x402-specification-v2.md, this facilitator only understands x402
+  // v2 wire format -- reject anything else before running any policy or
+  // AI logic, rather than guessing at an incompatible payload shape.
+  if (paymentPayload?.x402Version !== 2) {
+    return { isValid: false, invalidReason: "unsupported x402Version" };
+  }
+
   const now = deps.now ?? Date.now;
 
   const policyResult = await checkDeterministicPolicy(paymentRequirements, paymentPayload, {
@@ -209,6 +217,12 @@ export async function settlePayment(
   paymentRequirements: PaymentRequirements,
   ctx: FacilitatorCallContext = {},
 ): Promise<SettlementResponseBody> {
+  // Same x402Version guard as verifyPayment above -- reject before any
+  // policy/AI/Razorpay work runs.
+  if (paymentPayload?.x402Version !== 2) {
+    return settlementFailure("unsupported x402Version");
+  }
+
   const now = deps.now ?? Date.now;
 
   // 1. Re-run the deterministic policy engine. Never trust a prior
@@ -254,6 +268,12 @@ export async function settlePayment(
   // a second Payment Link.
   const existingPaymentLinkId = await deps.redis.get(requestPaymentLinkKey(requestId));
   let paymentLinkId: string;
+  // Only set when *this* call performs the created->pending transition
+  // below; a concurrent /settle call that joins an already-in-flight
+  // request (the `existingPaymentLinkId` branch) has no visibility into
+  // when the original call entered "pending" -- req:{requestId}:meta
+  // never stores that timestamp, only transitionState's return value does.
+  let pendingAt: string | null = null;
 
   if (existingPaymentLinkId) {
     paymentLinkId = existingPaymentLinkId;
@@ -283,7 +303,17 @@ export async function settlePayment(
     }
 
     paymentLinkId = linkResult.paymentLinkId;
-    await transitionState(deps.redis, requestId, "pending", { paymentLinkId });
+    const pendingEvent = await transitionState(deps.redis, requestId, "pending", { paymentLinkId }, {
+      aiRecommendation: advisory.recommendation,
+      aiJustification: advisory.justification,
+      aiProvider: advisory.provider,
+      // Always "allowed" here: an earlier `!policyResult.allowed` already
+      // returned above, so reaching this line means the deterministic
+      // engine passed.
+      deterministicDecision: "allowed",
+      deterministicReason: policyResult.reason,
+    });
+    pendingAt = pendingEvent.timestamp;
   }
 
   // 5. Bounded, pub/sub-driven wait -- delegated entirely to
@@ -305,7 +335,7 @@ export async function settlePayment(
     aiJustification: advisory.justification,
     aiProvider: advisory.provider,
     createdAt: meta?.createdAt ?? new Date(now()).toISOString(),
-    pendingAt: null,
+    pendingAt,
   };
 
   if (resolution.state === "approved") {
@@ -356,21 +386,94 @@ export async function settlePayment(
   return settlementFailure(errorReason);
 }
 
+/**
+ * Resolves the `origin` option for the `cors` middleware from
+ * ALLOWED_ORIGINS (comma-separated), defaulting to "*" outside production.
+ * In production with ALLOWED_ORIGINS unset, resolves to an empty allowlist
+ * (blocks all cross-origin requests) rather than silently defaulting to "*"
+ * -- an open CORS policy should be an explicit choice in production, not an
+ * accidental default.
+ */
+function resolveCorsOrigin(): string | string[] {
+  const raw = process.env.ALLOWED_ORIGINS;
+  if (raw && raw.trim().length > 0) {
+    return raw
+      .split(",")
+      .map(origin => origin.trim())
+      .filter(origin => origin.length > 0);
+  }
+  return process.env.NODE_ENV === "production" ? [] : "*";
+}
+
 export function createServer(deps: FacilitatorDeps): Express {
   const app = express();
 
+  // Behind a reverse proxy (Render, Railway, etc.) req.ip otherwise returns
+  // the proxy's own IP for every request, not the real client's -- which
+  // would make the velocity check's agent identifier (see
+  // ./policy/deterministic.ts's buildAgentIdentifier) collapse every caller
+  // behind the proxy into one bucket. `1` trusts exactly one hop (the
+  // reverse proxy itself), reading the real client IP from the first entry
+  // of X-Forwarded-For.
+  app.set("trust proxy", 1);
+
   // --- Razorpay webhooks ---------------------------------------------------
   //
-  // MUST be mounted before app.use(express.json()) below. Signature
-  // verification in razorpayWebhookHandler needs the raw, untouched request
-  // bytes (see that file's top-of-file comment); express.raw() here gives it
-  // exactly that, and because this route is matched and its handler sends a
-  // response before the request stack ever reaches express.json() further
-  // down, that body is never re-parsed as JSON.
+  // MUST be mounted before app.use(cors(...)) and app.use(express.json())
+  // below, and MUST NOT have CORS applied -- Razorpay's servers call this
+  // endpoint directly, not a browser, so it must remain origin-unrestricted.
+  // Signature verification in razorpayWebhookHandler needs the raw,
+  // untouched request bytes (see that file's top-of-file comment);
+  // express.raw() here gives it exactly that, and because this route is
+  // matched and its handler sends a response before the request stack ever
+  // reaches the middleware mounted below, that body is never re-parsed as
+  // JSON and never passes through the CORS layer.
   app.post("/webhooks/razorpay", express.raw({ type: "application/json" }), razorpayWebhookHandler(deps.redis));
+
+  app.use(
+    cors({
+      origin: resolveCorsOrigin(),
+      methods: ["GET", "POST"],
+      allowedHeaders: ["Content-Type", "X-Razorpay-Signature"],
+    }),
+  );
 
   // Every route below this line receives a JSON-parsed body.
   app.use(express.json());
+
+  // --- GET /health ---------------------------------------------------------
+  app.get("/health", (_req: Request, res: Response): void => {
+    void (async () => {
+      const requiredEnvVars = ["RAZORPAY_KEY_ID", "UPSTASH_REDIS_REST_URL", "DATABASE_URL"];
+      const missingEnvVars = requiredEnvVars.filter(key => !process.env[key]);
+
+      const result: Record<string, string> = { redis: "ok", postgres: "ok" };
+      let healthy = missingEnvVars.length === 0;
+      if (missingEnvVars.length > 0) {
+        result.env = `missing: ${missingEnvVars.join(", ")}`;
+      }
+
+      try {
+        // FacilitatorRedisClient has no PING command in its surface (it's
+        // the minimal set every handler in this file needs); GET is an
+        // equally lightweight connectivity probe and never throws on a
+        // missing key, only on a real connection failure.
+        await deps.redis.get("__health_check__");
+      } catch (error) {
+        healthy = false;
+        result.redis = `error: ${error instanceof Error ? error.message : String(error)}`;
+      }
+
+      try {
+        await deps.pg.query("SELECT 1");
+      } catch (error) {
+        healthy = false;
+        result.postgres = `error: ${error instanceof Error ? error.message : String(error)}`;
+      }
+
+      res.status(healthy ? 200 : 503).json({ status: healthy ? "ok" : "degraded", ...result });
+    })();
+  });
 
   // --- POST /verify ---------------------------------------------------------
   app.post("/verify", (req: Request, res: Response): void => {
@@ -410,8 +513,24 @@ export function createServer(deps: FacilitatorDeps): Express {
   // Demo hook only. A real deployment would have a review UI that sets this
   // flag once a human has reviewed an AI hold/flag recommendation; this
   // endpoint is a stand-in for that UI's backend action.
+  //
+  // Guarded by a shared secret (CONFIRM_GATE_SECRET) since it lets any
+  // caller unblock a held/flagged settlement. If unset, this still serves
+  // the route unauthenticated for demo convenience -- the startup warning
+  // below is the signal that a production deployment must set it.
+  if (!process.env.CONFIRM_GATE_SECRET) {
+    console.warn("CONFIRM_GATE_SECRET not set — /internal/confirm-gate is unauthenticated");
+  }
   app.post("/internal/confirm-gate/:requestId", (req: Request, res: Response): void => {
     void (async () => {
+      const secret = process.env.CONFIRM_GATE_SECRET;
+      if (secret) {
+        const authHeader = req.header("Authorization");
+        if (authHeader !== `Bearer ${secret}`) {
+          res.status(401).send("unauthorized");
+          return;
+        }
+      }
       await deps.redis.set(confirmGateKey(String(req.params.requestId)), "1");
       res.status(200).send("ok");
     })();
