@@ -7,6 +7,15 @@
 // (registerExactEvmScheme, which is a convenience wrapper built on top of that same
 // instance method). See the header comment in src/upi-scheme-client.ts for full detail.
 
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import dotenv from "dotenv";
+
+// Load the monorepo's single root .env (see "Consolidate to single root
+// .env") -- this file lives at x402-upi-client/test, so the repo root is two
+// levels up. Must run before MERCHANT_URL/DEMO_PAYER_VPA are read below.
+dotenv.config({ path: path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../.env") });
+
 import { x402Client } from "@x402/core/client";
 import { wrapFetchWithPayment } from "@x402/fetch";
 import { registerUpiScheme } from "../src/index";

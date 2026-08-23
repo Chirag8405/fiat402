@@ -22,6 +22,14 @@
  * bodies with `isValid: false` / `success: false`).
  */
 
+// Must be the first import: razorpay/client.ts and store/{db,redis}.ts read
+// process.env at module top level (see their own top-level `export const`s),
+// and ES module evaluation runs each imported module to completion, in
+// import order, before this file's own body runs -- so ./load-env's
+// dotenv.config() call has to be the first thing this dependency graph
+// evaluates, not just textually the first statement.
+import "./load-env";
+
 import express, { type Express, type Request, type Response } from "express";
 import type { PaymentPayload, PaymentRequirements } from "@x402/core/types";
 import { checkDeterministicPolicy, type VelocityRedisClient } from "./policy/deterministic";

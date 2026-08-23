@@ -1,4 +1,12 @@
 import type { NextConfig } from "next";
+import dotenv from "dotenv";
+import path from "path";
+
+// Next.js only auto-loads .env/.env.local from this project's own directory,
+// not the monorepo root -- load the single root .env (see "Consolidate to
+// single root .env") before the rest of this config, and before any route
+// code runs, so process.env is populated the same way for `next dev`/`next build`.
+dotenv.config({ path: path.resolve(__dirname, "../../.env") });
 
 /**
  * `serverExternalPackages` keeps pg/@upstash/redis/razorpay (pulled in transitively

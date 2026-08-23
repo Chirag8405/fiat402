@@ -12,7 +12,8 @@
     "@fiat402/scheme-upi": "file:../packages/scheme-upi",
     "@x402/core": "^2.23.0",
     "@x402/evm": "^2.23.0",
-    "@x402/fetch": "^2.23.0"
+    "@x402/fetch": "^2.23.0",
+    "dotenv": "^17.4.2"
   },
   "devDependencies": {
     "@types/node": "^22.13.4",
