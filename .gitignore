@@ -1,6 +1,7 @@
 # Env / secrets
 .env
 .env.*
+.env-*
 !.env.example
 
 # Dependencies
@@ -9,6 +10,7 @@ node_modules/
 # Build output
 dist/
 build/
+.next/
 *.tsbuildinfo
 
 # Package manager
