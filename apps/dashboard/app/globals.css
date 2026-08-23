@@ -1,0 +1,35 @@
+@import "tailwindcss";
+
+@theme {
+  --color-border: hsl(240 6% 20%);
+  --color-background: hsl(240 10% 6%);
+  --color-foreground: hsl(0 0% 96%);
+  --color-muted: hsl(240 6% 14%);
+  --color-muted-foreground: hsl(240 5% 65%);
+  --color-card: hsl(240 8% 9%);
+  --color-card-foreground: hsl(0 0% 96%);
+  --color-primary: hsl(199 89% 58%);
+  --color-primary-foreground: hsl(0 0% 100%);
+  --color-success: hsl(142 71% 45%);
+  --color-warning: hsl(38 92% 55%);
+  --color-danger: hsl(0 84% 63%);
+}
+
+body {
+  background-color: var(--color-background);
+  color: var(--color-foreground);
+  font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+}
+
+@keyframes pulse-ring {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-success) 55%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 8px color-mix(in srgb, var(--color-success) 0%, transparent);
+  }
+}
+
+.live-pulse {
+  animation: pulse-ring 1.6s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}

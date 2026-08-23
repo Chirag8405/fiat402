@@ -1,0 +1,138 @@
+"use client";
+
+/**
+ * Composes the five panels over a single EventSource connection to
+ * /api/stream. SSE lifecycle is handled explicitly:
+ *   - onopen  -> "live" connection indicator
+ *   - onerror -> visible "reconnecting…" indicator (EventSource auto-retries;
+ *                we just surface that it's happening instead of freezing)
+ *   - onmessage -> parse JSON, validate the FiatEvent shape, validate `state`
+ *                  is known before deriving anything from it; an unknown
+ *                  state is console.warn'd and otherwise dropped here (each
+ *                  panel that touches `state` -- StateMachineViz in
+ *                  particular -- has its own belt-and-suspenders guard too).
+ *
+ * Only fields the `fiat402:events` schema actually carries (requestId,
+ * state, previousState, timestamp, meta.{paymentLinkId,razorpayPaymentId,
+ * reason}) are used to derive what's shown -- see DecisionPanel's and
+ * RawTrafficViewer's top-of-file comments for the fields that schema does
+ * not carry and why they render as "not available" rather than fabricated.
+ */
+
+import { useEffect, useState } from "react";
+import { ConnectionIndicator, type ConnectionStatus } from "../components/ConnectionIndicator";
+import { RawTrafficViewer } from "../components/RawTrafficViewer";
+import { UpiCollectCard } from "../components/UpiCollectCard";
+import { StateMachineViz } from "../components/StateMachineViz";
+import { DecisionPanel } from "../components/DecisionPanel";
+import { ReconciliationRecord, type ObservedTimestamps } from "../components/ReconciliationRecord";
+import { isFiatEventShape, isKnownState, type FiatEvent } from "../lib/events";
+
+interface RequestTrail {
+  requestId: string;
+  events: FiatEvent[];
+}
+
+function emptyTimestamps(): ObservedTimestamps {
+  return { pendingAt: null, resolvedAt: null, settledAt: null, failedAt: null };
+}
+
+/**
+ * Timestamps built purely from events actually observed live for this
+ * request. Mirrors apps/facilitator/src/server.ts's settlePayment
+ * resolution semantics: `resolvedAt` tracks the latest "approved" event (an
+ * earlier "declined" does not resolve the wait -- see
+ * packages/scheme-upi/src/state-machine.ts's awaitResolution and the UPI
+ * retry edge case in CLAUDE.md), falling back to the terminal event's own
+ * timestamp when no "approved" was ever observed (the timeout path).
+ */
+function deriveTimestamps(events: FiatEvent[]): ObservedTimestamps {
+  const timestamps = emptyTimestamps();
+  for (const event of events) {
+    if (event.state === "pending" && !timestamps.pendingAt) timestamps.pendingAt = event.timestamp;
+    if (event.state === "approved") timestamps.resolvedAt = event.timestamp;
+    if (event.state === "settled") {
+      timestamps.settledAt = event.timestamp;
+      if (!timestamps.resolvedAt) timestamps.resolvedAt = event.timestamp;
+    }
+    if (event.state === "failed") {
+      timestamps.failedAt = event.timestamp;
+      if (!timestamps.resolvedAt) timestamps.resolvedAt = event.timestamp;
+    }
+  }
+  return timestamps;
+}
+
+export default function DashboardPage() {
+  const [status, setStatus] = useState<ConnectionStatus>("connecting");
+  const [latestEvent, setLatestEvent] = useState<FiatEvent | null>(null);
+  const [trail, setTrail] = useState<RequestTrail | null>(null);
+
+  useEffect(() => {
+    const source = new EventSource("/api/stream");
+
+    source.onopen = () => setStatus("live");
+    source.onerror = () => setStatus("reconnecting");
+
+    source.onmessage = message => {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(message.data);
+      } catch {
+        return;
+      }
+      if (!isFiatEventShape(parsed)) return;
+
+      if (!isKnownState(parsed.state)) {
+        console.warn(`page: received unrecognized state "${parsed.state}" for request ${parsed.requestId}; ignoring`);
+        return;
+      }
+
+      setLatestEvent(parsed);
+      setTrail(prev => {
+        if (!prev || prev.requestId !== parsed.requestId) {
+          return { requestId: parsed.requestId, events: [parsed] };
+        }
+        return { requestId: prev.requestId, events: [...prev.events, parsed] };
+      });
+    };
+
+    return () => source.close();
+  }, []);
+
+  const events = trail?.events ?? [];
+  const requestId = trail?.requestId ?? null;
+  const current = events[events.length - 1] ?? null;
+  const paymentLinkId = [...events].reverse().find(event => event.meta.paymentLinkId)?.meta.paymentLinkId ?? null;
+  const razorpayPaymentId = [...events].reverse().find(event => event.meta.razorpayPaymentId)?.meta.razorpayPaymentId ?? null;
+  const finalOutcome = current?.state === "settled" || current?.state === "failed" ? current.state : null;
+
+  return (
+    <main className="mx-auto flex min-h-screen max-w-6xl flex-col gap-6 p-6">
+      <header className="flex items-center justify-between">
+        <div>
+          <h1 className="text-lg font-semibold">fiat402 control tower</h1>
+          <p className="text-xs text-muted-foreground">Live view over the fiat402:events Redis channel</p>
+        </div>
+        <ConnectionIndicator status={status} />
+      </header>
+
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <StateMachineViz event={latestEvent} />
+        <UpiCollectCard requestId={requestId} state={current?.state ?? null} paymentLinkId={paymentLinkId} />
+        <DecisionPanel requestId={requestId} deterministic={null} ai={null} />
+        <ReconciliationRecord
+          requestId={requestId}
+          finalOutcome={finalOutcome}
+          razorpayPaymentId={razorpayPaymentId}
+          paymentLinkId={paymentLinkId}
+          timestamps={deriveTimestamps(events)}
+          deterministic={null}
+          ai={null}
+        />
+      </div>
+
+      <RawTrafficViewer requestId={requestId} paymentRequiredHeader={null} paymentSignatureHeader={null} paymentResponseHeader={null} />
+    </main>
+  );
+}

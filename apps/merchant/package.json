@@ -1,0 +1,25 @@
+{
+  "name": "@fiat402/merchant",
+  "version": "0.1.0",
+  "private": true,
+  "description": "fiat402 example merchant resource server: a Next.js protected endpoint gated behind the x402 upi scheme, self-facilitating in-process against @fiat402/facilitator",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@x402/core": "^2.23.0",
+    "next": "^15.1.6",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.4",
+    "@types/react": "^19.0.8",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.5"
+  }
+}
