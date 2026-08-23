@@ -13,6 +13,7 @@
     "@x402/core": "^2.23.0"
   },
   "devDependencies": {
+    "@types/node": "^22.13.4",
     "typescript": "^5.7.3",
     "vitest": "^3.0.5"
   }
