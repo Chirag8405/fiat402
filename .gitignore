@@ -1,0 +1,31 @@
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
+
+# Package manager
+package-lock.json
+pnpm-debug.log*
+npm-debug.log*
+yarn-error.log*
+
+# Test / coverage
+coverage/
+
+# Editor / OS
+.DS_Store
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+CLAUDE.md
