@@ -205,7 +205,7 @@ async function callGroq(prompt: string, fetchImpl: typeof fetch): Promise<Parsed
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: "llama-3.3-70b-versatile",
+        model: "openai/gpt-oss-120b",
         messages: [{ role: "user", content: prompt }],
       }),
     },
