@@ -283,7 +283,9 @@ export async function settlePayment(
     // forward/reverse keys) happen in one try block: if either fails,
     // we must not transition to "pending" with a half-recorded request.
     const amountPaise = Number(paymentRequirements.amount);
-    const expiryUnixTs = Math.floor(now() / 1000) + paymentRequirements.maxTimeoutSeconds;
+    const maxTimeoutSeconds = paymentRequirements.maxTimeoutSeconds ?? 90;
+    const RAZORPAY_MIN_EXPIRY_SECONDS = 15 * 60; // Razorpay requires minimum 15 minutes
+    const expiryUnixTs = Math.floor(Date.now() / 1000) + Math.max(maxTimeoutSeconds, RAZORPAY_MIN_EXPIRY_SECONDS);
     const linkResult = await createUpiPaymentLink(amountPaise, extractDescription(paymentRequirements), expiryUnixTs);
 
     if (!linkResult.ok) {
