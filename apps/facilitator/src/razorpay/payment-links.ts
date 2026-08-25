@@ -94,8 +94,7 @@ export async function createUpiPaymentLink(
     currency: "INR",
     description,
     expire_by: expiryUnixTs,
-    customer: {},
-  };
+  } as Parameters<typeof razorpayClient.paymentLink.create>[0];
 
   try {
     const paymentLink = await razorpayClient.paymentLink.create(params);
