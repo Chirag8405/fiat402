@@ -573,21 +573,25 @@ export function adaptUpstashClient(client: typeof redisClient): FacilitatorRedis
     zremrangebyscore: (key, min, max) => client.zremrangebyscore(key, min as number, max as number),
     zcard: key => client.zcard(key),
     subscribe: (channels: string[]): EventSubscription => {
-      // Explicit <string> type param: every message this facilitator
-      // publishes is JSON.stringify'd text (see ./ws.ts's publishEvent), so
-      // TMessage is always string -- without this, the SDK's generic
-      // defaults it to `unknown`.
-      const subscriber = client.subscribe<string>(channels);
+      // No <string> type param here (and never `<unknown>` either, for the
+      // same reason): the SDK auto-deserializes SSE message payloads by
+      // default (Subscriber<TMessage = any>; automaticDeserialization is
+      // never disabled anywhere in this codebase), so a subscribed
+      // message's real runtime type is whatever the published JSON parses
+      // to -- usually an object, per ./ws.ts's FiatEvent -- not a string.
+      // An explicit `<string>` here previously asserted that false premise
+      // at compile time, which is exactly what let ./ws.ts's
+      // subscribeToEvents redundantly re-JSON.parse an already-parsed
+      // object (throwing, silently) go unnoticed. Leaving TMessage
+      // unspecified (SDK default `any`) rather than lying with a narrower
+      // type; ./ws.ts's EventSubscription.on("message", ...) declares the
+      // honest type (`unknown`) that callers actually have to narrow.
+      const subscriber = client.subscribe(channels);
       return {
         on: (event: "message" | "error", listener: (...args: never[]) => void) => {
           if (event === "message") {
-            subscriber.on("message", (data: { channel: string; message: string }) => {
-              // TEMP DIAGNOSTIC (see investigation: "awaitResolution misses the
-              // approved event in production") -- isolates whether messages are
-              // actually arriving from Upstash's SSE stream at all (vs. arriving
-              // but being lost/filtered somewhere downstream in our own code).
-              console.log(`[adaptUpstashClient] upstash message event: channel=${data.channel} message=${data.message}`);
-              (listener as (message: string, channel: string) => void)(data.message, data.channel);
+            subscriber.on("message", (data: { channel: string; message: unknown }) => {
+              (listener as (message: unknown, channel: string) => void)(data.message, data.channel);
             });
           } else {
             subscriber.on("error", listener as (error: unknown) => void);

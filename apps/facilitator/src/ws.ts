@@ -93,9 +93,19 @@ export interface PublishRedisClient {
  * subscription down. Modeled on @upstash/redis's `redis.subscribe(...)`
  * return value (an SSE-backed emitter), so the real Upstash client satisfies
  * this structurally without an adapter.
+ *
+ * `message` is `unknown`, not `string`: @upstash/redis's real client
+ * auto-deserializes SSE message payloads by default (its `Subscriber`
+ * applies `JSON.parse` internally unless `automaticDeserialization: false`
+ * is set, which this codebase never does -- see
+ * apps/facilitator/src/server.ts's adaptUpstashClient), so a listener here
+ * normally receives an already-parsed value, not raw JSON text. Declaring
+ * this as `string` previously let a real bug (subscribeToEvents redundantly
+ * re-JSON.parse'ing an already-parsed object, which throws and was silently
+ * swallowed) slip past the type checker -- see subscribeToEvents below.
  */
 export interface EventSubscription {
-  on(event: "message", listener: (message: string, channel: string) => void): void;
+  on(event: "message", listener: (message: unknown, channel: string) => void): void;
   on(event: "error", listener: (error: unknown) => void): void;
   unsubscribe(): void | Promise<void>;
 }
@@ -119,32 +129,67 @@ export async function publishEvent(redis: PublishRedisClient, event: FiatEvent):
 }
 
 /**
- * Subscribes to `fiat402:events` and invokes `onEvent` for every
- * successfully-parsed message. Malformed (non-JSON, or JSON that doesn't
- * look like a FiatEvent) messages are dropped rather than crashing the
- * subscriber — a single bad message on a shared channel must not take down
- * every listener.
+ * Structural check that `value` looks like a FiatEvent (requestId/state are
+ * both present and strings). The real safety net regardless of how `value`
+ * got here -- freshly JSON.parse'd from a string, or passed through as
+ * already-deserialized -- so an unexpected shape is caught identically on
+ * either path.
+ */
+function isFiatEventLike(value: unknown): value is FiatEvent {
+  return (
+    !!value &&
+    typeof value === "object" &&
+    typeof (value as FiatEvent).requestId === "string" &&
+    typeof (value as FiatEvent).state === "string"
+  );
+}
+
+/**
+ * Subscribes to `fiat402:events` and invokes `onEvent` for every message
+ * that parses/resolves to something FiatEvent-shaped. Malformed (non-JSON
+ * text, or a value -- parsed or not -- that doesn't look like a FiatEvent)
+ * messages are dropped rather than crashing the subscriber — a single bad
+ * message on a shared channel must not take down every listener. Both drop
+ * paths log why, so a silent miss is never invisible again (see the
+ * "awaitResolution misses the approved event in production" investigation:
+ * this used to be a bare `catch { return; }` with no logging at all).
  *
  * Returns an unsubscribe function.
  */
 export function subscribeToEvents(redis: SubscribeRedisClient, onEvent: (event: FiatEvent) => void): () => void {
   const subscription = redis.subscribe([EVENTS_CHANNEL]);
 
-  subscription.on("message", (message: string) => {
+  subscription.on("message", (message: unknown) => {
+    // @upstash/redis's real client auto-deserializes SSE message payloads by
+    // default (see EventSubscription's doc comment above), so `message`
+    // normally arrives here already parsed -- only JSON.parse when it's
+    // actually still a string (e.g. this file's own test fakes, or a client
+    // with automaticDeserialization disabled). Calling JSON.parse on a
+    // non-string value coerces it via String() first, which for an object
+    // produces the literal text "[object Object]" -- not valid JSON, so it
+    // throws. That's the exact bug this branch fixes.
     let parsed: unknown;
-    try {
-      parsed = JSON.parse(message);
-    } catch {
+    if (typeof message === "string") {
+      try {
+        parsed = JSON.parse(message);
+      } catch (err) {
+        console.error(
+          `[subscribeToEvents] JSON.parse failed for message on channel "${EVENTS_CHANNEL}": ${err instanceof Error ? err.message : String(err)}; raw=${JSON.stringify(message)}`,
+        );
+        return;
+      }
+    } else {
+      parsed = message;
+    }
+
+    if (!isFiatEventLike(parsed)) {
+      console.error(
+        `[subscribeToEvents] message on channel "${EVENTS_CHANNEL}" did not look like a FiatEvent (typeof original message=${typeof message}): ${JSON.stringify(parsed)}`,
+      );
       return;
     }
-    if (
-      parsed &&
-      typeof parsed === "object" &&
-      typeof (parsed as FiatEvent).requestId === "string" &&
-      typeof (parsed as FiatEvent).state === "string"
-    ) {
-      onEvent(parsed as FiatEvent);
-    }
+
+    onEvent(parsed);
   });
 
   let unsubscribed = false;

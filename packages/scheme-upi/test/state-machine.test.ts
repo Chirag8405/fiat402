@@ -152,7 +152,12 @@ describe("transitionState", () => {
 
     const received: string[] = [];
     redis.subscribe([EVENTS_CHANNEL]).on("message", message => {
-      received.push(message);
+      // This fake's own publish/subscribe loop only ever forwards the raw
+      // string transitionState publishes (see FakePubSubRedisClient.publish
+      // above) -- unlike ../../../apps/facilitator/src/ws.ts's
+      // EventSubscription contract, which allows `unknown` because the real
+      // @upstash/redis client may hand back an already-deserialized object.
+      received.push(message as string);
     });
 
     const event = await transitionState(redis, requestId, "pending", { paymentLinkId: "plink_abc" });
