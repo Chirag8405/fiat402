@@ -1,15 +1,13 @@
 /**
  * Client-safe re-exports and guards for the `fiat402:events` pub/sub schema.
  *
- * Type-only import from apps/facilitator/src/ws.ts, which is the single
- * authoritative source for this shape (see that file's top-of-file comment
- * and CLAUDE.md's "Pub/sub event schema" section). Only the *type* is
- * imported here (erased at build time) -- app/page.tsx is a client
- * component and must not pull in ws.ts's runtime code (it's fine either
- * way, ws.ts has no Node-only imports, but keeping this a type-only import
- * documents that the browser bundle has no server dependency).
+ * Types come from ./types.ts, a copy of apps/facilitator/src/ws.ts's shapes
+ * (see that file's top-of-file comment and CLAUDE.md's "Pub/sub event
+ * schema" section) kept in this package rather than imported across
+ * packages -- apps/dashboard/ must have zero imports into apps/facilitator/
+ * so Vercel's dashboard-only install doesn't miss a dependency.
  */
-import type { FiatEvent, RequestState } from "../../facilitator/src/ws";
+import type { FiatEvent, RequestState } from "./types";
 
 export type { FiatEvent, RequestState };
 
