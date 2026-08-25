@@ -33,6 +33,7 @@ async function main(): Promise<void> {
   }
 
   const client = new x402Client();
+  client.setSpendControls({ allowedAssets: true });
   registerUpiScheme(client, {
     payerVpa: process.env.DEMO_PAYER_VPA,
   });
