@@ -37,7 +37,7 @@ export interface AdvisoryContext {
   fetchImpl?: typeof fetch;
 }
 
-const TIMEOUT_MS = 5000;
+const TIMEOUT_MS = 15000;
 const VALID_RECOMMENDATIONS: readonly AdvisoryRecommendation[] = ["approve", "hold", "flag"];
 
 interface ParsedAdvisory {
@@ -262,7 +262,8 @@ export async function getAdvisoryRecommendation(
   try {
     const { recommendation, justification } = await callGroq(prompt, fetchImpl);
     return { recommendation, justification, provider: "groq" };
-  } catch {
+  } catch (err) {
+      console.log("[ai-advisory] Groq failed:", err);
     // Fall through to fail-closed on any Groq failure.
   }
 
