@@ -117,7 +117,6 @@ function deriveDecision(events: FiatEvent[]): Decision {
 export default function DashboardPage() {
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
   const [lastPolledAt, setLastPolledAt] = useState<string | null>(null);
-  const [latestEvent, setLatestEvent] = useState<FiatEvent | null>(null);
   const [trail, setTrail] = useState<RequestTrail | null>(null);
 
   useEffect(() => {
@@ -125,7 +124,16 @@ export default function DashboardPage() {
     let cursor: string | null = null;
 
     function applyEvent(parsed: FiatEvent): void {
-      setLatestEvent(parsed);
+      // Functional updater, deliberately: when a poll batch contains several
+      // events for the same request (a fast payment can resolve
+      // pending->approved->settled within one batch), React 18 batches every
+      // setTrail call in this loop into a single re-render -- but a
+      // functional updater still applies each call in order against the
+      // running state, so `trail.events` ends up with the full sequence
+      // rather than only the last event. StateMachineViz's own
+      // minimum-visible-duration queue depends on receiving that full
+      // sequence, not just the latest state -- see that component's
+      // top-of-file comment.
       setTrail(prev => {
         if (!prev || prev.requestId !== parsed.requestId) {
           return { requestId: parsed.requestId, events: [parsed] };
@@ -188,7 +196,7 @@ export default function DashboardPage() {
       </header>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <StateMachineViz event={latestEvent} />
+        <StateMachineViz events={events} />
         <UpiCollectCard requestId={requestId} state={current?.state ?? null} paymentLinkId={paymentLinkId} />
         <DecisionPanel requestId={requestId} deterministic={deterministic} ai={ai} />
         <ReconciliationRecord

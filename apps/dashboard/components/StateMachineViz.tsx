@@ -2,8 +2,9 @@
 
 /**
  * Animates created -> pending -> approved/declined/expired -> settled/failed
- * as SSE events arrive, keyed off each event's `state` and `previousState`
- * (CLAUDE.md's "State machine" / "Pub/sub event schema" sections).
+ * as polled events arrive (see ../app/page.tsx's poll loop against
+ * /api/events), keyed off each event's `state` (CLAUDE.md's "State machine"
+ * / "Pub/sub event schema" sections).
  *
  * In practice `created` and `expired` are rarely-if-ever seen live: per
  * packages/scheme-upi/src/state-machine.ts, `createTrackedRequest` does not
@@ -16,6 +17,19 @@
  * Unrecognized `state` strings (schema drift) are console.warn'd and
  * otherwise ignored: the previously-visualized state is left unchanged, no
  * reset, no throw, no error boundary.
+ *
+ * Minimum-visible-duration queue: this component receives the *full* event
+ * trail for the currently-tracked request (`events`), not just the latest
+ * one -- page.tsx's poll loop can, and does, resolve a payment fast enough
+ * that "pending", "approved", and "settled" all land within a single poll
+ * batch (or across two polls milliseconds apart). Rendering the latest state
+ * immediately would make the UI appear to jump straight from "pending" to
+ * "settled", skipping "approved" entirely -- the payer outcome is the whole
+ * point of this diagram. So instead of mirroring `events` directly into
+ * display state, new distinct states are enqueued and paced out at least
+ * MIN_VISIBLE_MS apart, oldest first, regardless of how fast they actually
+ * arrived. A terminal state arriving early never jumps the queue -- it just
+ * waits its turn, per this file's own point: showing the full journey.
  */
 
 import { useEffect, useState } from "react";
@@ -25,7 +39,8 @@ import { cn } from "../lib/utils";
 import { isKnownState, type FiatEvent, type RequestState } from "../lib/events";
 
 export interface StateMachineVizProps {
-  event: FiatEvent | null;
+  /** Full event trail for the currently-tracked request, oldest first (see this file's top comment on why "latest only" isn't enough). */
+  events: FiatEvent[];
 }
 
 interface Stage {
@@ -59,36 +74,99 @@ function boxTone(status: "current" | "visited" | "idle") {
   return "border-border bg-muted text-muted-foreground";
 }
 
-interface Trail {
+/** Minimum time (ms) each state is shown before the queue advances to the next one. */
+const MIN_VISIBLE_MS = 800;
+
+export interface QueueState {
   requestId: string;
-  history: RequestState[];
+  /** States actually rendered so far, oldest first. */
+  displayed: RequestState[];
+  /** States waiting their turn, oldest first. */
+  pending: RequestState[];
 }
 
-export function StateMachineViz({ event }: StateMachineVizProps) {
-  const [trail, setTrail] = useState<Trail | null>(null);
-
-  useEffect(() => {
-    if (!event) return;
-
+/**
+ * Reduces a request's full event trail to the distinct sequence of states it
+ * passed through (consecutive duplicates collapsed to one), skipping and
+ * warning on any unrecognized state -- same belt-and-suspenders guard the
+ * old single-event version had, kept even though ../app/page.tsx's poll
+ * loop already filters these before they ever reach this component.
+ *
+ * Exported (with the two functions below) so the queueing algorithm itself
+ * -- the actual fix -- is unit-testable without a component-rendering
+ * harness, which this package doesn't otherwise have; see test/state-machine-viz.test.ts.
+ */
+export function distinctStateSequence(events: FiatEvent[], requestId: string): RequestState[] {
+  const sequence: RequestState[] = [];
+  for (const event of events) {
     if (!isKnownState(event.state)) {
-      // Schema drift: never seen before. Leave the visualization exactly as
-      // it was -- do not reset, do not throw.
-      console.warn(`StateMachineViz: unrecognized state "${event.state}" for request ${event.requestId}; ignoring`);
-      return;
+      console.warn(`StateMachineViz: unrecognized state "${event.state}" for request ${requestId}; ignoring`);
+      continue;
     }
+    if (sequence[sequence.length - 1] !== event.state) sequence.push(event.state);
+  }
+  return sequence;
+}
 
-    setTrail(prev => {
-      if (!prev || prev.requestId !== event.requestId) {
-        // No trail yet, or a different requestId: a new flow started, begin a fresh trail.
-        return { requestId: event.requestId, history: [event.state] };
-      }
-      if (prev.history[prev.history.length - 1] === event.state) return prev;
-      return { requestId: prev.requestId, history: [...prev.history, event.state] };
-    });
-  }, [event]);
+/**
+ * Folds a request's full event trail into the next queue state: starts a
+ * fresh queue (first state shown immediately, rest queued) when `events`
+ * belongs to a different request than `prev`, or appends whatever's new
+ * beyond what's already displayed/queued for the same request. Never
+ * removes, reorders, or jumps ahead -- a terminal state arriving early just
+ * takes its place at the back of `pending` like everything else.
+ */
+export function enqueueNewStates(prev: QueueState | null, events: FiatEvent[]): QueueState | null {
+  if (events.length === 0) return prev;
 
-  const requestId = trail?.requestId ?? null;
-  const history = trail?.history ?? [];
+  const requestId = events[0]!.requestId;
+  const targetSequence = distinctStateSequence(events, requestId);
+  if (targetSequence.length === 0) return prev;
+
+  if (!prev || prev.requestId !== requestId) {
+    const [first, ...rest] = targetSequence;
+    return { requestId, displayed: [first!], pending: rest };
+  }
+
+  const alreadyKnown = prev.displayed.length + prev.pending.length;
+  const newTail = targetSequence.slice(alreadyKnown);
+  if (newTail.length === 0) return prev;
+  return { requestId: prev.requestId, displayed: prev.displayed, pending: [...prev.pending, ...newTail] };
+}
+
+/** Pops one state off `pending` onto the end of `displayed`. No-op if `pending` is empty. */
+export function advanceQueue(prev: QueueState): QueueState {
+  if (prev.pending.length === 0) return prev;
+  const [next, ...rest] = prev.pending;
+  return { requestId: prev.requestId, displayed: [...prev.displayed, next!], pending: rest };
+}
+
+export function StateMachineViz({ events }: StateMachineVizProps) {
+  const [queue, setQueue] = useState<QueueState | null>(null);
+
+  // Enqueue newly-seen states whenever a new trail (or a longer version of
+  // the current one) arrives. Only ever appends -- never removes or
+  // reorders what's already displayed/queued for the same requestId.
+  useEffect(() => {
+    setQueue(prev => enqueueNewStates(prev, events));
+  }, [events]);
+
+  // Pace the queue: advance one state at a time, at least MIN_VISIBLE_MS
+  // apart. Re-fires on every queue mutation (including its own advance),
+  // which is what makes this a self-driving "tick" rather than a one-shot
+  // timer -- the cleanup below guarantees only one timer is ever live.
+  useEffect(() => {
+    if (!queue || queue.pending.length === 0) return;
+
+    const timer = setTimeout(() => {
+      setQueue(prev => (prev ? advanceQueue(prev) : prev));
+    }, MIN_VISIBLE_MS);
+
+    return () => clearTimeout(timer);
+  }, [queue]);
+
+  const requestId = queue?.requestId ?? null;
+  const history = queue?.displayed ?? [];
   const current = history[history.length - 1] ?? null;
   const visited = new Set(history);
 
