@@ -1,6 +1,6 @@
 # fiat402
 
-The first `upi` payment scheme for the x402 protocol, settling AI agent payments over India's UPI rail via Razorpay.
+A `upi` payment scheme for the x402 protocol, settling AI agent payments over India's UPI rail via Razorpay.
 
 ## The problem
 
@@ -17,33 +17,35 @@ UPI has no client-side signing step. A UPI collect request is approved by a huma
 5. Razorpay fires a `payment.captured` webhook; the facilitator's state machine transitions the request `pending -> approved`.
 6. The facilitator's bounded pub/sub wait inside `/settle` resolves, and the merchant returns `200` with the protected resource.
 
-```
- agent                merchant              facilitator             razorpay
-   |   GET resource        |                       |                       |
-   |---------------------->|                       |                       |
-   |   402 (accepts: upi)  |                       |                       |
-   |<----------------------|                       |                       |
-   |                       |                       |                       |
-   |------------------- POST /verify ------------->|                       |
-   |<---------------- isValid + advisory ----------|                       |
-   |                       |                       |                       |
-   |------------------- POST /settle ------------->|                       |
-   |                       |                 create Payment Link           |
-   |                       |                       |---------------------->|
-   |                       |                       |<---- shortUrl --------|
-   |                       |               (state: created -> pending)     |
-   |                       |                       |                       |
-   |                                          [ human pays on phone ]      |
-   |                                               |                       |
-   |                       |                       |<-- payment.captured --|
-   |                       |               (state: pending -> approved)    |
-   |                       |               bounded wait resolves           |
-   |<----------------- SettlementResponse ---------|                       |
-   |                       |                       |                       |
-   |----- retry request with PAYMENT-SIGNATURE --->|                       |
-   |                       |----- in-process settle (self-facilitation) -->|
-   |   200 + resource      |                       |                       |
-   |<----------------------|                       |                       |
+```mermaid
+sequenceDiagram
+    participant Agent
+    participant Merchant
+    participant Facilitator
+    participant Razorpay
+
+    Agent->>Merchant: GET resource
+    Merchant-->>Agent: 402 (accepts: upi)
+
+    Agent->>Facilitator: POST /verify
+    Facilitator-->>Agent: isValid + AI advisory
+
+    Agent->>Facilitator: POST /settle
+    Facilitator->>Razorpay: create Payment Link
+    Razorpay-->>Facilitator: shortUrl
+    Note over Facilitator: state: created → pending
+
+    Note over Agent,Razorpay: human pays on phone via UPI
+
+    Razorpay-->>Facilitator: webhook: payment.captured
+    Note over Facilitator: state: pending → approved
+    Note over Facilitator: bounded wait resolves
+
+    Facilitator-->>Agent: SettlementResponse
+
+    Agent->>Merchant: retry with PAYMENT-SIGNATURE
+    Merchant->>Facilitator: in-process settle (self-facilitation)
+    Merchant-->>Agent: 200 + resource
 ```
 
 ## What makes this a genuine protocol extension
