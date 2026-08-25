@@ -64,7 +64,7 @@ sequenceDiagram
 | Layer | Decision | Overridable? |
 |---|---|---|
 | Deterministic policy | Hard amount ceiling, merchant allowlist, velocity limit | No — final authority |
-| AI advisory (Gemini 2.5 Flash-Lite → Groq llama-3.3-70b-versatile → fail-closed) | Approve / hold / flag | Yes — advisory only |
+| AI advisory (Gemini 2.5 Flash → Groq gpt-oss-120b → fail-closed) | Approve / hold / flag | Yes — advisory only |
 
 ## The bounded-wait problem
 
