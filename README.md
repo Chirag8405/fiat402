@@ -19,30 +19,30 @@ UPI has no client-side signing step. A UPI collect request is approved by a huma
 
 ```
  agent                merchant              facilitator             razorpay
-   |   GET resource       |                       |                       |
+   |   GET resource        |                       |                       |
    |---------------------->|                       |                       |
    |   402 (accepts: upi)  |                       |                       |
    |<----------------------|                       |                       |
    |                       |                       |                       |
    |------------------- POST /verify ------------->|                       |
-   |<---------------- isValid + advisory -----------|                       |
+   |<---------------- isValid + advisory ----------|                       |
    |                       |                       |                       |
-   |------------------- POST /settle -------------->|                       |
-   |                       |                 create Payment Link            |
+   |------------------- POST /settle ------------->|                       |
+   |                       |                 create Payment Link           |
    |                       |                       |---------------------->|
-   |                       |                       |<---- shortUrl ---------|
-   |                       |               (state: created -> pending)      |
+   |                       |                       |<---- shortUrl --------|
+   |                       |               (state: created -> pending)     |
    |                       |                       |                       |
-   |                                          [ human pays on phone ]        |
-   |                                                |                       |
-   |                       |                       |<--- payment.captured --|
-   |                       |               (state: pending -> approved)     |
-   |                       |               bounded wait resolves            |
-   |<----------------- SettlementResponse -----------|                       |
+   |                                          [ human pays on phone ]      |
+   |                                               |                       |
+   |                       |                       |<-- payment.captured --|
+   |                       |               (state: pending -> approved)    |
+   |                       |               bounded wait resolves           |
+   |<----------------- SettlementResponse ---------|                       |
    |                       |                       |                       |
-   |----- retry request with PAYMENT-SIGNATURE ---->|                       |
-   |                       |----- in-process settle (self-facilitation) --->|
-   |   200 + resource       |                       |                       |
+   |----- retry request with PAYMENT-SIGNATURE --->|                       |
+   |                       |----- in-process settle (self-facilitation) -->|
+   |   200 + resource      |                       |                       |
    |<----------------------|                       |                       |
 ```
 
