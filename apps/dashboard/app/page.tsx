@@ -1,16 +1,22 @@
 "use client";
 
 /**
- * Composes the five panels over a single EventSource connection to
- * /api/stream. SSE lifecycle is handled explicitly:
- *   - onopen  -> "live" connection indicator
- *   - onerror -> visible "reconnecting…" indicator (EventSource auto-retries;
- *                we just surface that it's happening instead of freezing)
- *   - onmessage -> parse JSON, validate the FiatEvent shape, validate `state`
- *                  is known before deriving anything from it; an unknown
- *                  state is console.warn'd and otherwise dropped here (each
- *                  panel that touches `state` -- StateMachineViz in
- *                  particular -- has its own belt-and-suspenders guard too).
+ * Composes the five panels over a poll loop against /api/events (see that
+ * route's top-of-file comment) -- replaces the former EventSource connection
+ * to /api/stream (deleted; a held-open SSE connection didn't fit Vercel's
+ * serverless model reliably). Polling lifecycle:
+ *   - Every POLL_INTERVAL_MS, fetch /api/events?since=<cursor>, where
+ *     `cursor` starts null (first poll fetches whatever's currently
+ *     buffered) and is then set to the response's own `cursor` field.
+ *   - A successful poll -> "polling" status with a lastPolledAt timestamp,
+ *     visible on ConnectionIndicator.
+ *   - A failed poll (network error or non-OK response) -> "connection-issue"
+ *     status; the loop keeps retrying on the same interval regardless.
+ *   - Each event within a batch: parse JSON, validate the FiatEvent shape,
+ *     validate `state` is known before deriving anything from it; an unknown
+ *     state is console.warn'd and otherwise dropped here (each panel that
+ *     touches `state` -- StateMachineViz in particular -- has its own
+ *     belt-and-suspenders guard too).
  *
  * `fiat402:events` now optionally carries decision-layer fields
  * (aiRecommendation/aiJustification/aiProvider/deterministicDecision/
@@ -31,9 +37,16 @@ import { DecisionPanel, type DeterministicDecision, type AiAdvisory } from "../c
 import { ReconciliationRecord, type ObservedTimestamps } from "../components/ReconciliationRecord";
 import { isFiatEventShape, isKnownState, type FiatEvent } from "../lib/events";
 
+const POLL_INTERVAL_MS = 2500;
+
 interface RequestTrail {
   requestId: string;
   events: FiatEvent[];
+}
+
+interface EventsResponse {
+  events: unknown[];
+  cursor: string;
 }
 
 function emptyTimestamps(): ObservedTimestamps {
@@ -103,29 +116,15 @@ function deriveDecision(events: FiatEvent[]): Decision {
 
 export default function DashboardPage() {
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
+  const [lastPolledAt, setLastPolledAt] = useState<string | null>(null);
   const [latestEvent, setLatestEvent] = useState<FiatEvent | null>(null);
   const [trail, setTrail] = useState<RequestTrail | null>(null);
 
   useEffect(() => {
-    const source = new EventSource("/api/stream");
+    let cancelled = false;
+    let cursor: string | null = null;
 
-    source.onopen = () => setStatus("live");
-    source.onerror = () => setStatus("reconnecting");
-
-    source.onmessage = message => {
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(message.data);
-      } catch {
-        return;
-      }
-      if (!isFiatEventShape(parsed)) return;
-
-      if (!isKnownState(parsed.state)) {
-        console.warn(`page: received unrecognized state "${parsed.state}" for request ${parsed.requestId}; ignoring`);
-        return;
-      }
-
+    function applyEvent(parsed: FiatEvent): void {
       setLatestEvent(parsed);
       setTrail(prev => {
         if (!prev || prev.requestId !== parsed.requestId) {
@@ -133,9 +132,41 @@ export default function DashboardPage() {
         }
         return { requestId: prev.requestId, events: [...prev.events, parsed] };
       });
-    };
+    }
 
-    return () => source.close();
+    async function poll(): Promise<void> {
+      try {
+        const url = cursor ? `/api/events?since=${encodeURIComponent(cursor)}` : "/api/events";
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(`poll failed with status ${response.status}`);
+
+        const data = (await response.json()) as EventsResponse;
+        if (cancelled) return;
+
+        cursor = data.cursor;
+        setStatus("polling");
+        setLastPolledAt(new Date().toISOString());
+
+        for (const raw of data.events) {
+          if (!isFiatEventShape(raw)) continue;
+          if (!isKnownState(raw.state)) {
+            console.warn(`page: received unrecognized state "${raw.state}" for request ${raw.requestId}; ignoring`);
+            continue;
+          }
+          applyEvent(raw);
+        }
+      } catch (err) {
+        if (!cancelled) setStatus("connection-issue");
+        console.warn("page: poll against /api/events failed", err);
+      }
+    }
+
+    void poll();
+    const interval = setInterval(() => void poll(), POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
   }, []);
 
   const events = trail?.events ?? [];
@@ -151,9 +182,9 @@ export default function DashboardPage() {
       <header className="flex items-center justify-between">
         <div>
           <h1 className="text-lg font-semibold">fiat402 control tower</h1>
-          <p className="text-xs text-muted-foreground">Live view over the fiat402:events Redis channel</p>
+          <p className="text-xs text-muted-foreground">Polling view over the fiat402:events Redis channel</p>
         </div>
-        <ConnectionIndicator status={status} />
+        <ConnectionIndicator status={status} lastPolledAt={lastPolledAt} />
       </header>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">

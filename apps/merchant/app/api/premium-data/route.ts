@@ -7,7 +7,9 @@
 import { withX402Payment } from "../../../lib/x402-middleware";
 
 export const runtime = "nodejs";
-export const maxDuration = 60; // seconds — Vercel Hobby plan ceiling
+// No maxDuration export here: that was a Vercel-specific function-duration
+// config. Render runs this as a long-running `next start` process with no
+// per-request execution ceiling, so it has no effect and isn't needed.
 
 const RESOURCE = {
   url: "/api/premium-data",

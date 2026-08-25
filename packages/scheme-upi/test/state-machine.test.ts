@@ -19,6 +19,7 @@ import { EVENTS_CHANNEL, type EventSubscription } from "../../../apps/facilitato
 class FakePubSubRedisClient implements StateMachineRedisClient {
   private store = new Map<string, string>();
   private hashes = new Map<string, Record<string, string>>();
+  private lists = new Map<string, string[]>();
   private channelListeners = new Map<string, Set<(message: string, channel: string) => void>>();
 
   async get(key: string): Promise<string | null> {
@@ -48,6 +49,19 @@ class FakePubSubRedisClient implements StateMachineRedisClient {
     if (!listeners) return 0;
     for (const listener of listeners) listener(message, channel);
     return listeners.size;
+  }
+
+  async lpush(key: string, ...values: string[]): Promise<number> {
+    const list = this.lists.get(key) ?? [];
+    list.unshift(...values);
+    this.lists.set(key, list);
+    return list.length;
+  }
+
+  async ltrim(key: string, start: number, stop: number): Promise<string> {
+    const list = this.lists.get(key) ?? [];
+    this.lists.set(key, list.slice(start, stop + 1));
+    return "OK";
   }
 
   subscribe(channels: string[]): EventSubscription {

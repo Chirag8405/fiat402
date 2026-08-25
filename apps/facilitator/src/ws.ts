@@ -20,8 +20,24 @@
  * Exports two functions:
  *   - publishEvent: used by state-machine.ts's transition function.
  *   - subscribeToEvents: used by state-machine.ts's resolution function, and
- *     (Module 7) by the dashboard's SSE relay, which subscribes unfiltered
- *     and forwards every event to connected browsers.
+ *     previously by the dashboard's SSE relay (retired -- the dashboard now
+ *     polls apps/dashboard/app/api/events/route.ts instead of holding an SSE
+ *     connection open, since Vercel doesn't suit either a long-lived
+ *     connection or the merchant's bounded wait reliably).
+ *
+ * `EVENTS_RECENT_LIST` is a second, additive persistence path alongside the
+ * `fiat402:events` pub/sub channel above: not in CLAUDE.md's original
+ * "Redis key schema" table (same situation as state-machine.ts's two
+ * reverse-index keys documented in that file's top-of-file comment -- added
+ * after the fact, treated as part of the authoritative schema, documented at
+ * its point of origin). Pub/sub alone has no history -- a subscriber only
+ * sees messages published while it's connected -- which is fine for a
+ * held-open SSE relay but not for a polling reader that can miss whatever
+ * was published between two polls. publishEvent LPUSHes the same event onto
+ * this bounded list (newest-first) and LTRIMs it to the most recent 200
+ * entries so apps/dashboard/app/api/events/route.ts can catch up. No TTL: it
+ * is a rolling global buffer, not a per-request key, so it isn't part of the
+ * `req:{requestId}:*` TTL scheme CLAUDE.md describes.
  */
 
 export type RequestState = "created" | "pending" | "approved" | "declined" | "expired" | "settled" | "failed";
@@ -54,13 +70,21 @@ export interface FiatEvent {
 
 export const EVENTS_CHANNEL = "fiat402:events";
 
+/** Bounded recent-events list for pollers; see this file's top-of-file comment. */
+export const EVENTS_RECENT_LIST = "fiat402:events:recent";
+
+/** How many events EVENTS_RECENT_LIST retains, via LTRIM, on every publish. */
+const EVENTS_RECENT_LIST_MAX = 200;
+
 /**
- * Minimal publish-side Redis surface. `PUBLISH` is a plain Redis command, so
- * this works identically whether `redis` is the real Upstash REST client or
- * a fake in tests.
+ * Minimal publish-side Redis surface. `PUBLISH`/`LPUSH`/`LTRIM` are plain
+ * Redis commands, so this works identically whether `redis` is the real
+ * Upstash REST client or a fake in tests.
  */
 export interface PublishRedisClient {
   publish(channel: string, message: string): Promise<number>;
+  lpush(key: string, ...values: string[]): Promise<number>;
+  ltrim(key: string, start: number, stop: number): Promise<string>;
 }
 
 /**
@@ -88,7 +112,10 @@ export interface SubscribeRedisClient {
  * caller-owned (see store/redis.ts) — never instantiated in this file.
  */
 export async function publishEvent(redis: PublishRedisClient, event: FiatEvent): Promise<void> {
-  await redis.publish(EVENTS_CHANNEL, JSON.stringify(event));
+  const message = JSON.stringify(event);
+  await redis.publish(EVENTS_CHANNEL, message);
+  await redis.lpush(EVENTS_RECENT_LIST, message);
+  await redis.ltrim(EVENTS_RECENT_LIST, 0, EVENTS_RECENT_LIST_MAX - 1);
 }
 
 /**

@@ -29,3 +29,12 @@ export interface FiatEvent {
 }
 
 export const EVENTS_CHANNEL = "fiat402:events";
+
+/**
+ * Bounded recent-events list the facilitator LPUSHes onto (and LTRIMs to the
+ * most recent 200 entries) alongside every EVENTS_CHANNEL publish -- see
+ * apps/facilitator/src/ws.ts's publishEvent. This is what
+ * app/api/events/route.ts polls, since a plain pub/sub channel has no
+ * history for a reader that wasn't subscribed at publish time.
+ */
+export const EVENTS_RECENT_LIST = "fiat402:events:recent";

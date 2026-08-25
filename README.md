@@ -102,6 +102,18 @@ The demo script requires the facilitator and merchant to be running and the merc
 
 See `.env.example` for the full list. It's organized into sections: Razorpay (API keys and webhook secret), Upstash Redis (state machine + pub/sub store), Postgres (reconciliation record storage), AI Advisory (Gemini/Groq keys for the advisory layer), Merchant (the demo merchant's VPA, name, and resource price), Policy (amount ceiling, merchant allowlist, velocity limit, and the confirm-gate secret), x402 UPI Client / demo (the merchant URL and demo payer VPA the demo script targets), and Facilitator server (listen port and allowed CORS origins).
 
+## Deployment
+
+The facilitator and merchant both deploy to Render as long-running Node
+services (not Vercel) -- the merchant's `/api/premium-data` route blocks on
+the facilitator's bounded UPI settlement wait (`maxTimeoutSeconds`, up to
+90s), which doesn't fit a serverless function's execution ceiling. Render has
+no such ceiling, and both services read `PORT` from the environment, which
+Render auto-injects (facilitator: `apps/facilitator/src/server.ts`; merchant:
+Next.js's own `next start`, via `apps/merchant/package.json`'s `start`
+script). The dashboard remains on Vercel -- it's a polling client with no
+long-lived connections or bounded waits of its own.
+
 ## Test suite
 
 59 tests across 8 files, all passing.

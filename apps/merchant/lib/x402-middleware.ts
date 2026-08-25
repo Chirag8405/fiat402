@@ -106,7 +106,7 @@ function buildUpiRequirements(): PaymentRequirements {
     amount,
     asset: "INR",
     payTo,
-    maxTimeoutSeconds: 60,
+    maxTimeoutSeconds: 90,
     extra: {
       merchantName,
       description: "Premium data access",

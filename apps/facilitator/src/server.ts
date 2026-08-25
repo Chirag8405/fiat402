@@ -562,6 +562,8 @@ export function adaptUpstashClient(client: typeof redisClient): FacilitatorRedis
     hset: (key, fields) => client.hset(key, fields),
     hgetall: key => client.hgetall<Record<string, string>>(key),
     publish: (channel, message) => client.publish(channel, message),
+    lpush: (key, ...values) => client.lpush(key, ...values),
+    ltrim: (key, start, stop) => client.ltrim(key, start, stop),
     zadd: (key, score, member) => client.zadd(key, { score, member }).then(result => result ?? 0),
     zremrangebyscore: (key, min, max) => client.zremrangebyscore(key, min as number, max as number),
     zcard: key => client.zcard(key),
