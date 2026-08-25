@@ -102,6 +102,7 @@ export async function createUpiPaymentLink(
     return { ok: true, paymentLinkId: paymentLink.id, shortUrl: paymentLink.short_url };
   } catch (err) {
     if (isRazorpaySdkErrorLike(err)) {
+      console.log("[razorpay] SDK error:", JSON.stringify(err.error));
       return {
         ok: false,
         errorCode: err.error.code ?? null,
@@ -109,6 +110,7 @@ export async function createUpiPaymentLink(
       };
     }
     const message = err instanceof Error ? err.message : String(err);
+    console.log("[razorpay] Non-SDK error:", message);
     return { ok: false, errorCode: null, errorDescription: `Razorpay request failed: ${message}` };
   }
 }
