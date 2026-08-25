@@ -189,6 +189,10 @@ async function handleCapturedOrPaid(
     razorpayPaymentId: paymentId ?? null,
     reason: null,
   });
+
+  console.log(
+    `razorpay webhook: ${eventType} processed, requestId=${requestId} transitioned ${previousState ?? "null"} -> approved`,
+  );
 }
 
 async function handleFailed(

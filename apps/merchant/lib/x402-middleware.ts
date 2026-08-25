@@ -106,7 +106,9 @@ function buildUpiRequirements(): PaymentRequirements {
     amount,
     asset: "INR",
     payTo,
-    maxTimeoutSeconds: 90,
+    // TEMP: bumped 90 -> 180 to confirm the webhook-timing theory while
+    // testing. Revert to 90 before the final demo.
+    maxTimeoutSeconds: 180,
     extra: {
       merchantName,
       description: "Premium data access",
