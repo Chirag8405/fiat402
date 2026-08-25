@@ -99,9 +99,12 @@ function buildPrompt(
   context: AdvisoryContext,
 ): string {
   const payerVpa =
-    payload && typeof payload === "object" && payload.payload && typeof payload.payload === "object"
-      ? (payload.payload as { payerVpa?: unknown }).payerVpa
-      : undefined;
+  payload && typeof payload === "object"
+    ? ((payload as Record<string, unknown>).payerVpa as string | undefined) ??
+      (payload.payload && typeof payload.payload === "object"
+        ? (payload.payload as { payerVpa?: unknown }).payerVpa
+        : undefined)
+    : undefined;
   const agentMetadata = context.agentMetadata ? JSON.stringify(context.agentMetadata) : "none";
 
   return [
