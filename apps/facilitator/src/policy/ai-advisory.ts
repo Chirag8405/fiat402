@@ -180,6 +180,7 @@ async function callGemini(prompt: string, fetchImpl: typeof fetch): Promise<Pars
     throw new Error("Gemini response missing text content");
   }
 
+  console.log("[ai-advisory] Gemini raw response:", text);
   const parsed = parseRecommendation(text);
   if (!parsed) {
     throw new Error("Gemini response was not parseable into approve/hold/flag");
@@ -223,6 +224,7 @@ async function callGroq(prompt: string, fetchImpl: typeof fetch): Promise<Parsed
     throw new Error("Groq response missing message content");
   }
 
+  console.log("[ai-advisory] Groq raw response:", text);
   const parsed = parseRecommendation(text);
   if (!parsed) {
     throw new Error("Groq response was not parseable into approve/hold/flag");
@@ -252,7 +254,8 @@ export async function getAdvisoryRecommendation(
   try {
     const { recommendation, justification } = await callGemini(prompt, fetchImpl);
     return { recommendation, justification, provider: "gemini" };
-  } catch {
+  } catch (err) {
+    console.log("[ai-advisory] Gemini failed:", err);
     // Fall through to Groq on any Gemini failure.
   }
 
