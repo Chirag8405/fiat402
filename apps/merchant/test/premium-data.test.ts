@@ -39,7 +39,7 @@ function validPaymentPayload() {
       amount: RESOURCE_PRICE_PAISE,
       asset: "INR",
       payTo: MERCHANT_VPA,
-      maxTimeoutSeconds: 90,
+      maxTimeoutSeconds: 60,
       extra: { merchantName: MERCHANT_NAME, description: "Premium data access" },
     },
     payload: { txnRef: "txn_test_1" },
@@ -83,7 +83,7 @@ describe("GET /api/premium-data — no PAYMENT-SIGNATURE header", () => {
       amount: RESOURCE_PRICE_PAISE,
       asset: "INR",
       payTo: MERCHANT_VPA,
-      maxTimeoutSeconds: 90,
+      maxTimeoutSeconds: 60,
       extra: { merchantName: MERCHANT_NAME, description: "Premium data access" },
     });
 

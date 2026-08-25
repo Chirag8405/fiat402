@@ -7,6 +7,7 @@
 import { withX402Payment } from "../../../lib/x402-middleware";
 
 export const runtime = "nodejs";
+export const maxDuration = 60; // seconds — Vercel Hobby plan ceiling
 
 const RESOURCE = {
   url: "/api/premium-data",
