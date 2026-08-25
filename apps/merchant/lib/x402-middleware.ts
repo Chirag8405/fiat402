@@ -10,37 +10,70 @@
  *   - no/invalid payment  -> 402, base64 PAYMENT-REQUIRED header carrying PaymentRequired
  *   - valid payment       -> 200, base64 PAYMENT-RESPONSE header carrying SettlementResponse
  *
- * Verification/settlement is delegated in-process to the facilitator's
- * verifyPayment/settlePayment functions (apps/facilitator/src/server.ts),
- * per the self-facilitation pattern in
- * x402-reference/examples/typescript/servers/self-facilitation/README.md:
- * "creates an in-process facilitator ... instead of calling an external
- * facilitator URL". These are plain in-process function calls -- no HTTP
- * hop, no second Express instance -- reusing exactly the same policy engine,
- * AI advisory layer, and Razorpay/Redis/Postgres wiring the standalone
- * facilitator process uses.
+ * Verification/settlement is delegated to the deployed facilitator over
+ * HTTP (POST FACILITATOR_URL/verify, POST FACILITATOR_URL/settle) per the
+ * facilitator interface in CLAUDE.md ("Facilitator interface" section) and
+ * x402-specification-v2.md section 7. This app does NOT import anything
+ * from apps/facilitator/ -- that package's dependencies (express, cors,
+ * razorpay, pg, dotenv) are not installed in this package's node_modules,
+ * and Vercel only installs apps/merchant's own node_modules, so an
+ * in-process/same-repo import would build here but fail in that deployment.
+ * VerifyResponseBody/SettlementResponseBody below are the minimal shapes
+ * this file needs, copied from apps/facilitator/src/server.ts's exported
+ * types rather than imported.
  */
 
 import type { PaymentPayload, PaymentRequirements } from "@x402/core/types";
-import {
-  verifyPayment,
-  settlePayment,
-  adaptUpstashClient,
-  type FacilitatorDeps,
-  type SettlementResponseBody,
-} from "../../facilitator/src/server";
-import { redisClient } from "../../facilitator/src/store/redis";
-import { pgPool } from "../../facilitator/src/store/db";
 
 const SCHEME = "upi";
 const NETWORK = "upi:in";
 const X402_VERSION = 2;
 
-/** Shared in-process facilitator dependencies -- constructed once per server process. */
-const facilitatorDeps: FacilitatorDeps = {
-  redis: adaptUpstashClient(redisClient),
-  pg: pgPool,
-};
+/** Minimal shape of the facilitator's POST /settle response body (x402-specification-v2.md section 5.3). */
+export interface SettlementResponseBody {
+  success: boolean;
+  errorReason?: string;
+  payer?: string;
+  transaction: string;
+  network: string;
+  amount?: string;
+  extensions?: Record<string, unknown>;
+}
+
+/** Minimal shape of the facilitator's POST /verify response body (x402-specification-v2.md section 5.4). */
+export interface VerifyResponseBody {
+  isValid: boolean;
+  invalidReason?: string;
+  payer?: string;
+  extra?: Record<string, unknown>;
+}
+
+/**
+ * POSTs to the deployed facilitator's /verify or /settle endpoint.
+ * `agentHeader` is forwarded as X-Agent-Identifier -- the facilitator's own
+ * HTTP routes read the caller's velocity-check identity from that header
+ * (see apps/facilitator/src/server.ts's /verify and /settle routes), and
+ * requestIp is derived facilitator-side from the real HTTP connection now
+ * that this is a genuine network hop, so it doesn't need to be forwarded
+ * explicitly.
+ */
+async function callFacilitator<T>(
+  path: "/verify" | "/settle",
+  paymentPayload: PaymentPayload,
+  paymentRequirements: PaymentRequirements,
+  agentHeader: string | undefined,
+): Promise<T> {
+  const baseUrl = process.env.FACILITATOR_URL ?? "";
+  const res = await fetch(`${baseUrl}${path}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(agentHeader ? { "X-Agent-Identifier": agentHeader } : {}),
+    },
+    body: JSON.stringify({ x402Version: X402_VERSION, paymentPayload, paymentRequirements }),
+  });
+  return (await res.json()) as T;
+}
 
 interface ResourceInfo {
   url: string;
@@ -173,18 +206,14 @@ export async function withX402Payment(
 
   const paymentPayload = decoded.payload;
   const paymentRequirements = buildUpiRequirements();
+  const agentHeader = request.headers.get("X-Agent-Identifier") ?? undefined;
 
-  const ctx = {
-    requestIp: request.headers.get("x-forwarded-for") ?? undefined,
-    agentHeader: request.headers.get("X-Agent-Identifier") ?? undefined,
-  };
-
-  const verifyResult = await verifyPayment(facilitatorDeps, paymentPayload, paymentRequirements, ctx);
+  const verifyResult = await callFacilitator<VerifyResponseBody>("/verify", paymentPayload, paymentRequirements, agentHeader);
   if (!verifyResult.isValid) {
     return paymentRequiredResponse(resource, verifyResult.invalidReason ?? "payment verification failed", verifyResult);
   }
 
-  const settleResult = await settlePayment(facilitatorDeps, paymentPayload, paymentRequirements, ctx);
+  const settleResult = await callFacilitator<SettlementResponseBody>("/settle", paymentPayload, paymentRequirements, agentHeader);
   if (!settleResult.success) {
     return paymentRequiredResponse(resource, settleResult.errorReason ?? "payment settlement failed", settleResult);
   }

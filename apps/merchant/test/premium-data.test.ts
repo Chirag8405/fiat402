@@ -1,23 +1,22 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import type { PaymentRequirements } from "@x402/core/types";
 
-const verifyPaymentMock = vi.fn();
-const settlePaymentMock = vi.fn();
-
 /**
- * Mocks the facilitator's in-process functions (see
- * ../lib/x402-middleware.ts's top-of-file comment on the self-facilitation
- * pattern) so these tests exercise only the merchant's own 402/200 wiring,
- * not the real deterministic policy / AI advisory / Razorpay / Redis stack
- * apps/facilitator/test/server.test.ts already covers.
+ * Mocks the global `fetch` that ../lib/x402-middleware.ts's callFacilitator
+ * uses to reach the deployed facilitator's HTTP /verify and /settle
+ * endpoints, so these tests exercise only the merchant's own 402/200
+ * wiring, not the real deterministic policy / AI advisory / Razorpay /
+ * Redis stack apps/facilitator/test/server.test.ts already covers.
  */
-vi.mock("../../facilitator/src/server", () => ({
-  verifyPayment: verifyPaymentMock,
-  settlePayment: settlePaymentMock,
-  adaptUpstashClient: vi.fn(() => ({})),
-}));
-vi.mock("../../facilitator/src/store/redis", () => ({ redisClient: {} }));
-vi.mock("../../facilitator/src/store/db", () => ({ pgPool: {} }));
+const fetchMock = vi.fn();
+vi.stubGlobal("fetch", fetchMock);
+
+function mockFacilitatorResponses(verifyBody: unknown, settleBody?: unknown): void {
+  fetchMock.mockImplementation((url: string) => {
+    const body = url.endsWith("/verify") ? verifyBody : settleBody;
+    return Promise.resolve({ json: () => Promise.resolve(body) });
+  });
+}
 
 const { GET } = await import("../app/api/premium-data/route");
 
@@ -57,8 +56,8 @@ beforeEach(() => {
   vi.stubEnv("MERCHANT_VPA", MERCHANT_VPA);
   vi.stubEnv("MERCHANT_NAME", MERCHANT_NAME);
   vi.stubEnv("RESOURCE_PRICE_PAISE", RESOURCE_PRICE_PAISE);
-  verifyPaymentMock.mockReset();
-  settlePaymentMock.mockReset();
+  vi.stubEnv("FACILITATOR_URL", "http://facilitator.test");
+  fetchMock.mockReset();
 });
 
 describe("GET /api/premium-data — no PAYMENT-SIGNATURE header", () => {
@@ -88,8 +87,7 @@ describe("GET /api/premium-data — no PAYMENT-SIGNATURE header", () => {
       extra: { merchantName: MERCHANT_NAME, description: "Premium data access" },
     });
 
-    expect(verifyPaymentMock).not.toHaveBeenCalled();
-    expect(settlePaymentMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 
@@ -102,8 +100,7 @@ describe("GET /api/premium-data — malformed PAYMENT-SIGNATURE", () => {
     expect(typeof challenge.error).toBe("string");
     expect(challenge.error?.length).toBeGreaterThan(0);
 
-    expect(verifyPaymentMock).not.toHaveBeenCalled();
-    expect(settlePaymentMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("returns 402 with PaymentRequired.error set when base64 decodes to non-JSON, not a 500", async () => {
@@ -115,13 +112,13 @@ describe("GET /api/premium-data — malformed PAYMENT-SIGNATURE", () => {
     expect(typeof challenge.error).toBe("string");
     expect(challenge.error?.length).toBeGreaterThan(0);
 
-    expect(verifyPaymentMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 
 describe("GET /api/premium-data — facilitator verify rejects", () => {
   it("returns 402 with invalidReason in the body when /verify returns isValid: false", async () => {
-    verifyPaymentMock.mockResolvedValue({ isValid: false, invalidReason: "amount exceeds MAX_AMOUNT_PAISE" });
+    mockFacilitatorResponses({ isValid: false, invalidReason: "amount exceeds MAX_AMOUNT_PAISE" });
 
     const header = Buffer.from(JSON.stringify(validPaymentPayload()), "utf-8").toString("base64");
     const response = await GET(requestWithSignature(header));
@@ -129,19 +126,21 @@ describe("GET /api/premium-data — facilitator verify rejects", () => {
     expect(response.status).toBe(402);
     const body = await response.json();
     expect(body.invalidReason).toBe("amount exceeds MAX_AMOUNT_PAISE");
-    expect(settlePaymentMock).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
 
 describe("GET /api/premium-data — facilitator settle fails", () => {
   it("returns 402, not 200, with errorReason in the body when /settle returns success: false", async () => {
-    verifyPaymentMock.mockResolvedValue({ isValid: true });
-    settlePaymentMock.mockResolvedValue({
-      success: false,
-      errorReason: "payment-declined",
-      transaction: "",
-      network: "upi:in",
-    });
+    mockFacilitatorResponses(
+      { isValid: true },
+      {
+        success: false,
+        errorReason: "payment-declined",
+        transaction: "",
+        network: "upi:in",
+      },
+    );
 
     const header = Buffer.from(JSON.stringify(validPaymentPayload()), "utf-8").toString("base64");
     const response = await GET(requestWithSignature(header));
@@ -154,13 +153,15 @@ describe("GET /api/premium-data — facilitator settle fails", () => {
 
 describe("GET /api/premium-data — facilitator settle succeeds", () => {
   it("returns 200, the resource JSON, and a spec-shaped PAYMENT-RESPONSE header", async () => {
-    verifyPaymentMock.mockResolvedValue({ isValid: true });
-    settlePaymentMock.mockResolvedValue({
-      success: true,
-      transaction: "pay_Qfldmt5StKZFCB",
-      network: "upi:in",
-      amount: RESOURCE_PRICE_PAISE,
-    });
+    mockFacilitatorResponses(
+      { isValid: true },
+      {
+        success: true,
+        transaction: "pay_Qfldmt5StKZFCB",
+        network: "upi:in",
+        amount: RESOURCE_PRICE_PAISE,
+      },
+    );
 
     const header = Buffer.from(JSON.stringify(validPaymentPayload()), "utf-8").toString("base64");
     const response = await GET(requestWithSignature(header));
