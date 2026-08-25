@@ -32,7 +32,43 @@ describe("createUpiPaymentLink", () => {
       currency: "INR",
       description: "One cup of chai",
       expire_by: 1_700_000_090,
-      customer: {},
+    });
+    expect(result).toEqual({
+      ok: true,
+      paymentLinkId: "plink_QflcnnZqCekuvL",
+      shortUrl: "https://rzp.io/i/AiGGmnh",
+    });
+  });
+
+  it("omits customer/notify entirely when notifyContact is not provided", async () => {
+    createMock.mockResolvedValue({
+      id: "plink_QflcnnZqCekuvL",
+      short_url: "https://rzp.io/i/AiGGmnh",
+    });
+
+    await createUpiPaymentLink(10000, "One cup of chai", 1_700_000_090);
+
+    const params = createMock.mock.calls[0]?.[0];
+    expect(params).not.toHaveProperty("customer");
+    expect(params).not.toHaveProperty("notify");
+  });
+
+  it("includes customer.contact and notify.sms when notifyContact is provided, enabling SMS notification", async () => {
+    createMock.mockResolvedValue({
+      id: "plink_QflcnnZqCekuvL",
+      short_url: "https://rzp.io/i/AiGGmnh",
+    });
+
+    const result = await createUpiPaymentLink(10000, "One cup of chai", 1_700_000_090, "+919876543210");
+
+    expect(createMock).toHaveBeenCalledWith({
+      upi_link: true,
+      amount: 10000,
+      currency: "INR",
+      description: "One cup of chai",
+      expire_by: 1_700_000_090,
+      customer: { contact: "+919876543210" },
+      notify: { sms: true },
     });
     expect(result).toEqual({
       ok: true,

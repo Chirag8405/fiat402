@@ -14,9 +14,17 @@
  * The Razorpay SDK's TypeScript type for the create body marks `customer` as
  * required (RazorpayPaymentLinkBaseRequestBody.customer), even though the
  * live docs list every `customer.*` sub-field as optional and don't require
- * `customer` itself for a UPI link. We satisfy the stricter SDK type with an
- * empty `customer: {}` rather than fight the type or use `any` — this sends
- * no customer data on the wire, matching what the docs describe as optional.
+ * `customer` itself for a UPI link. The `as Parameters<...>[0]` cast below
+ * satisfies the stricter SDK type without fighting it or using `any` — by
+ * default we send no `customer` field at all (equivalent to what the docs
+ * describe as optional), and only add one when a caller opts in.
+ *
+ * Optional SMS notification (`notifyContact`): per
+ * razorpay.com/docs/api/payments/payment-links/create-upi/, passing
+ * `customer.contact` (E.164 phone number) plus `notify: { sms: true }` makes
+ * Razorpay text the Payment Link to that number when it's created. Demo
+ * convenience only — omit `notifyContact` (the default) to send neither
+ * field, preserving the no-customer-data behavior above.
  *
  * Never lets a Razorpay API failure propagate as an unhandled exception:
  * every call is wrapped in try/catch and normalized into a typed error
@@ -75,11 +83,15 @@ function isRazorpaySdkErrorLike(value: unknown): value is RazorpaySdkErrorLike {
  * @param description - Shown to the payer on the Payment Link / UPI app.
  * @param expiryUnixTs - Unix timestamp (seconds) the link expires at; callers
  *   pass `now + maxTimeoutSeconds` per CLAUDE.md's state machine section.
+ * @param notifyContact - Optional phone number in E.164 format (e.g.
+ *   "+919876543210"). When provided, Razorpay SMSes the Payment Link to this
+ *   number on creation. Omit to send no customer/notify data (the default).
  */
 export async function createUpiPaymentLink(
   amountPaise: number,
   description: string,
   expiryUnixTs: number,
+  notifyContact?: string,
 ): Promise<CreateUpiPaymentLinkResult> {
   if (!Number.isInteger(amountPaise) || amountPaise <= 0) {
     return { ok: false, errorCode: null, errorDescription: "amountPaise must be a positive integer" };
@@ -94,6 +106,12 @@ export async function createUpiPaymentLink(
     currency: "INR",
     description,
     expire_by: expiryUnixTs,
+    ...(notifyContact
+      ? {
+          customer: { contact: notifyContact },
+          notify: { sms: true },
+        }
+      : {}),
   } as Parameters<typeof razorpayClient.paymentLink.create>[0];
 
   try {

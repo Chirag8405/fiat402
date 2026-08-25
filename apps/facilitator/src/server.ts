@@ -286,7 +286,12 @@ export async function settlePayment(
     const maxTimeoutSeconds = paymentRequirements.maxTimeoutSeconds ?? 90;
     const RAZORPAY_MIN_EXPIRY_SECONDS = 16 * 60; // Razorpay requires minimum 15 minutes
     const expiryUnixTs = Math.floor(Date.now() / 1000) + Math.max(maxTimeoutSeconds, RAZORPAY_MIN_EXPIRY_SECONDS);
-    const linkResult = await createUpiPaymentLink(amountPaise, extractDescription(paymentRequirements), expiryUnixTs);
+    const linkResult = await createUpiPaymentLink(
+      amountPaise,
+      extractDescription(paymentRequirements),
+      expiryUnixTs,
+      process.env.DEMO_NOTIFY_PHONE, // optional — enables SMS notification for demo purposes
+    );
 
     if (!linkResult.ok) {
       return settlementFailure("payment-link-creation-failed");
