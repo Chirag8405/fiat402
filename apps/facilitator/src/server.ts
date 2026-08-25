@@ -581,9 +581,14 @@ export function adaptUpstashClient(client: typeof redisClient): FacilitatorRedis
       return {
         on: (event: "message" | "error", listener: (...args: never[]) => void) => {
           if (event === "message") {
-            subscriber.on("message", (data: { channel: string; message: string }) =>
-              (listener as (message: string, channel: string) => void)(data.message, data.channel),
-            );
+            subscriber.on("message", (data: { channel: string; message: string }) => {
+              // TEMP DIAGNOSTIC (see investigation: "awaitResolution misses the
+              // approved event in production") -- isolates whether messages are
+              // actually arriving from Upstash's SSE stream at all (vs. arriving
+              // but being lost/filtered somewhere downstream in our own code).
+              console.log(`[adaptUpstashClient] upstash message event: channel=${data.channel} message=${data.message}`);
+              (listener as (message: string, channel: string) => void)(data.message, data.channel);
+            });
           } else {
             subscriber.on("error", listener as (error: unknown) => void);
           }

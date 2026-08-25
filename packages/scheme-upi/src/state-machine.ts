@@ -299,10 +299,17 @@ export async function awaitResolution(
     };
 
     const timer = setTimeout(() => {
+      // TEMP DIAGNOSTIC (see CLAUDE.md-adjacent investigation: "awaitResolution
+      // misses the approved event in production") -- remove or reduce once cause is confirmed.
+      console.log(`[awaitResolution] timeout fired for requestId=${requestId} after ${maxTimeoutSeconds}s`);
       finish({ state: "expired", event: null });
     }, maxTimeoutSeconds * 1000);
 
     unsubscribe = subscribeToEvents(redis, event => {
+      // TEMP DIAGNOSTIC: log every event this subscriber receives, matched or
+      // not -- tells us whether messages arrive at all vs. arrive but get
+      // filtered out incorrectly.
+      console.log(`[awaitResolution] received event: ${JSON.stringify(event)}`);
       if (event.requestId !== requestId) return;
       if (event.state === "approved") {
         finish({ state: "approved", event });
@@ -310,5 +317,17 @@ export async function awaitResolution(
       // "declined" is intentionally not handled here — see this function's
       // doc comment above for why.
     });
+
+    // TEMP DIAGNOSTIC: logged after subscribeToEvents() returns, i.e. after
+    // the underlying redis.subscribe() call and .on("message") registration
+    // have completed *synchronously* from this function's point of view. This
+    // does NOT prove the subscription is actually live on the Redis/Upstash
+    // server yet -- see the investigation notes on the SSE-backed
+    // @upstash/redis subscribe() implementation. Kept here specifically to
+    // test that theory: if a webhook can publish and this requestId's
+    // "approved" event is still missed, despite this log firing well before
+    // the timeout, that's evidence the gap is between this line and the
+    // subscription becoming live server-side, not in our own JS ordering.
+    console.log(`[awaitResolution] subscribed to channel for requestId=${requestId}`);
   });
 }
