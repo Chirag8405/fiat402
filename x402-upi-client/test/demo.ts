@@ -23,6 +23,17 @@ import { registerUpiScheme } from "../src/index";
 const MERCHANT_BASE_URL = process.env.MERCHANT_URL ?? "http://localhost:3001";
 const RESOURCE_URL = `${MERCHANT_BASE_URL}/api/premium-data`;
 
+/**
+ * `--mismatch`: sends a taskContext deliberately unrelated to the merchant's
+ * declared item (premium data access), to exercise the AI advisory layer's
+ * semanticMatch check (apps/facilitator/src/policy/ai-advisory.ts) against a
+ * real provider instead of the mocked unit test in
+ * apps/facilitator/test/ai-advisory.test.ts. Overrides DEMO_TASK_CONTEXT
+ * when passed, rather than requiring the env var to be hand-edited.
+ */
+const MISMATCH_TASK_CONTEXT = "Booking a one-way flight to Goa";
+const isMismatchRun = process.argv.includes("--mismatch");
+
 async function main(): Promise<void> {
   const probe = await fetch(RESOURCE_URL).catch(() => undefined);
   if (!probe || probe.status !== 402) {
@@ -32,13 +43,19 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  const taskContext = isMismatchRun
+    ? MISMATCH_TASK_CONTEXT
+    : (process.env.DEMO_TASK_CONTEXT ?? "Fetching premium data on behalf of the user");
+
+  if (isMismatchRun) {
+    console.log(`--mismatch: sending a deliberately unrelated taskContext: "${taskContext}"`);
+  }
+
   const client = new x402Client();
   client.setSpendControls({ allowedAssets: true });
   registerUpiScheme(client, {
     payerVpa: process.env.DEMO_PAYER_VPA,
-    agentMetadata: {
-      taskContext: process.env.DEMO_TASK_CONTEXT ?? "Fetching premium data on behalf of the user",
-    },
+    agentMetadata: { taskContext },
   });
 
   const fetchWithPayment = wrapFetchWithPayment(fetch, client);
