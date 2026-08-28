@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
+import { createHmac } from "node:crypto";
 import type { PaymentRequirements, PaymentPayload } from "@x402/core/types";
 import { deriveRequestId } from "../../../packages/scheme-upi/src/state-machine";
 import { EVENTS_CHANNEL, type FiatEvent } from "../src/ws";
@@ -335,6 +336,58 @@ describe("POST /settle — AI hold / confirm-gate", () => {
 
     const { body } = await settlePromise;
     expect(body).toMatchObject({ success: true, transaction: "pay_gated123" });
+  });
+
+  it("resolves successfully when the Payment Link is paid directly during the confirm-gate wait, without ever calling /internal/confirm-gate", async () => {
+    // Regression test for the bug where awaitConfirmGate ran (and finished)
+    // strictly BEFORE awaitResolution even subscribed: webhook-handler.ts
+    // publishes "approved" to fiat402:events BEFORE it satisfies the
+    // confirm-gate, so a direct payment's "approved" event was published to
+    // nobody and awaitResolution then subscribed too late to ever see it,
+    // timing out on every real payment. Driven through the real
+    // /webhooks/razorpay route (signed HMAC payload) rather than a
+    // hand-simulated pub/sub publish, so this exercises the actual
+    // publishTransition-then-satisfyConfirmGate ordering in production code.
+    const PAYMENT_LINK_ID = "plink_direct_pay";
+    const PAYMENT_ID = "pay_direct_pay_123";
+    const WEBHOOK_SECRET = "test-webhook-secret";
+    process.env.RAZORPAY_WEBHOOK_SECRET = WEBHOOK_SECRET;
+
+    createUpiPaymentLinkMock.mockResolvedValue({ ok: true, paymentLinkId: PAYMENT_LINK_ID, shortUrl: "https://rzp.io/i/direct" });
+    fetchImplMock.mockResolvedValue(geminiResponse("hold"));
+    await startServer();
+
+    const requirements = buildRequirements();
+    const payload = buildPayload(requirements, "order-hold-direct-pay");
+
+    const settlePromise = postSettle(requirements, payload);
+
+    // The Payment Link exists -- exactly the point at which a real payer
+    // could pay it directly, without any confirm-gate call ever happening.
+    await waitFor(() => createUpiPaymentLinkMock.mock.calls.length === 1);
+
+    const webhookBody = Buffer.from(
+      JSON.stringify({
+        event: "payment.captured",
+        payload: {
+          payment_link: { entity: { id: PAYMENT_LINK_ID } },
+          payment: { entity: { id: PAYMENT_ID } },
+        },
+      }),
+    );
+    const signature = createHmac("sha256", WEBHOOK_SECRET).update(webhookBody).digest("hex");
+
+    const webhookRes = await fetch(`${baseUrl}/webhooks/razorpay`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Razorpay-Signature": signature },
+      body: webhookBody,
+    });
+    expect(webhookRes.status).toBe(200);
+
+    // Never call /internal/confirm-gate -- the whole point is that paying
+    // directly is sufficient on its own.
+    const { body } = await settlePromise;
+    expect(body).toMatchObject({ success: true, transaction: PAYMENT_ID });
   });
 });
 

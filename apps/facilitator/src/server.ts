@@ -457,13 +457,38 @@ export async function settlePayment(
     pendingAt = pendingEvent.timestamp;
   }
 
-  // 5. AI-hold confirmation gate. Runs after the Payment Link exists
+  // 5. Start the bounded, pub/sub-driven payment wait NOW, before the
+  // confirm-gate wait below -- not after it. webhook-handler.ts's
+  // handleCapturedOrPaid publishes the "approved" event to fiat402:events
+  // BEFORE it calls satisfyConfirmGate (which publishes to
+  // fiat402:confirm-gate): paying the Payment Link directly can arrive at
+  // any point from here on, including during the confirm-gate wait, and if
+  // awaitResolution isn't already subscribed by then, that "approved" event
+  // is published to nobody and is gone for good -- awaitResolution would
+  // then subscribe too late and ride out its own full timeout regardless of
+  // whether the payment actually succeeded. Calling awaitResolution here
+  // (not awaiting it yet) guarantees its subscription is live before
+  // awaitConfirmGate's below even starts, since the synchronous portion of
+  // this call (including subscribeToEvents' redis.subscribe()) completes
+  // before the next line runs. Delegated entirely to state-machine.ts's
+  // awaitResolution, not reimplemented here as a poll loop; see that
+  // function's doc comment for why (the UPI retry edge case).
+  const resolutionPromise = awaitResolution(deps.redis, requestId, paymentRequirements.maxTimeoutSeconds);
+
+  // 6. AI-hold confirmation gate. Runs after the Payment Link exists
   // (created above, or joined via the idempotency branch) so a human has
   // something real to review/approve -- this is exactly the gap the old
   // short-circuit-before-any-Payment-Link-exists behavior left open. Bounded
-  // by the same maxTimeoutSeconds as the payment wait below; a timeout here
+  // by the same maxTimeoutSeconds as the payment wait above; a timeout here
   // is a clean settlementFailure, not a hang -- see awaitConfirmGate's doc
   // comment for the full failure-mode reasoning.
+  //
+  // resolutionPromise above is left running in the background if this
+  // branch returns early (hold never confirmed) -- awaitResolution exposes
+  // no cancellation handle, so its subscription/timer just rides out its
+  // own remaining window and self-cleans; this has no effect on the HTTP
+  // response, which has already been sent by then, and Redis's own
+  // req:{requestId}:* TTLs clean up regardless.
   if (advisory.recommendation === "hold") {
     const gateResult = await awaitConfirmGate(deps.redis, requestId, paymentRequirements.maxTimeoutSeconds);
     if (gateResult !== "confirmed") {
@@ -471,11 +496,7 @@ export async function settlePayment(
     }
   }
 
-  // 6. Bounded, pub/sub-driven wait -- delegated entirely to
-  // state-machine.ts's awaitResolution. Not reimplemented here as a
-  // poll loop; see that function's doc comment for why (the UPI retry
-  // edge case).
-  const resolution = await awaitResolution(deps.redis, requestId, paymentRequirements.maxTimeoutSeconds);
+  const resolution = await resolutionPromise;
 
   const meta = await deps.redis.hgetall(requestMetaKey(requestId));
   const baseRecord: Omit<ReconciliationRecord, "razorpayPaymentId" | "resolvedAt" | "settledAt" | "failedAt" | "finalOutcome"> = {
