@@ -175,6 +175,22 @@ function isFiatEventLike(value: unknown): value is FiatEvent {
  * "awaitResolution misses the approved event in production" investigation:
  * this used to be a bare `catch { return; }` with no logging at all).
  *
+ * RESOLVED ROOT CAUSE of that investigation: this function never registered
+ * an `"error"` listener on the subscription. @upstash/redis's real Subscriber
+ * backs each channel with its own SSE HTTP stream and an AbortController; if
+ * that stream drops for any reason other than an intentional abort (network
+ * blip, connection reset, anything short of this function's own
+ * unsubscribe), it dispatches an `"error"` event -- with no listener, that
+ * event was silently swallowed, the stream was dead with no further messages
+ * ever arriving, and the caller's own bounded timeout (awaitResolution's
+ * maxTimeoutSeconds) would eventually fire regardless of whether the
+ * publish it was waiting for had actually happened. This looked identical
+ * to "the event fired while subscribed but we still timed out" because
+ * that's exactly what it was -- the subscription silently died sometime
+ * between subscribing and the publish, not a bug in the publish/filter
+ * logic itself. Fixed below by registering an `"error"` handler that logs,
+ * matching this function's own message-side drop-and-log pattern.
+ *
  * Returns an unsubscribe function.
  */
 export function subscribeToEvents(redis: SubscribeRedisClient, onEvent: (event: FiatEvent) => void): () => void {
@@ -211,6 +227,19 @@ export function subscribeToEvents(redis: SubscribeRedisClient, onEvent: (event: 
     }
 
     onEvent(parsed);
+  });
+
+  // Without this, a dropped SSE stream (network blip, connection reset --
+  // anything short of this function's own unsubscribe) fails silently: the
+  // subscription is dead, no further messages ever arrive, and the caller's
+  // own bounded wait just rides out its timeout with no visibility into why.
+  // See this function's doc comment -- this was the actual root cause of
+  // the "awaitResolution misses the approved event in production"
+  // investigation referenced there.
+  subscription.on("error", (err: unknown) => {
+    console.error(
+      `[subscribeToEvents] subscription error on channel "${EVENTS_CHANNEL}": ${err instanceof Error ? err.message : String(err)}`,
+    );
   });
 
   let unsubscribed = false;
