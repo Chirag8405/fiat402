@@ -1,20 +1,23 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const createMock = vi.fn();
+const cancelMock = vi.fn();
 
 vi.mock("../src/razorpay/client", () => ({
   razorpayClient: {
     paymentLink: {
       create: createMock,
+      cancel: cancelMock,
     },
   },
 }));
 
 // Imported after the mock so payment-links.ts picks up the mocked client.
-const { createUpiPaymentLink } = await import("../src/razorpay/payment-links");
+const { createUpiPaymentLink, cancelUpiPaymentLink } = await import("../src/razorpay/payment-links");
 
 beforeEach(() => {
   createMock.mockReset();
+  cancelMock.mockReset();
 });
 
 describe("createUpiPaymentLink", () => {
@@ -120,5 +123,43 @@ describe("createUpiPaymentLink", () => {
       errorDescription: "expiryUnixTs must be a positive unix timestamp",
     });
     expect(createMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("cancelUpiPaymentLink", () => {
+  it("calls the Payment Links cancel API and returns a success result", async () => {
+    cancelMock.mockResolvedValue({ id: "plink_QflcnnZqCekuvL", status: "cancelled" });
+
+    const result = await cancelUpiPaymentLink("plink_QflcnnZqCekuvL");
+
+    expect(cancelMock).toHaveBeenCalledWith("plink_QflcnnZqCekuvL");
+    expect(result).toEqual({ ok: true });
+  });
+
+  it("returns a typed error result (not a thrown exception) on a Razorpay API error", async () => {
+    cancelMock.mockRejectedValue({
+      statusCode: 400,
+      error: { code: "BAD_REQUEST_ERROR", description: "This link has already been paid" },
+    });
+
+    const result = await cancelUpiPaymentLink("plink_QflcnnZqCekuvL");
+
+    expect(result).toEqual({
+      ok: false,
+      errorCode: "BAD_REQUEST_ERROR",
+      errorDescription: "This link has already been paid",
+    });
+  });
+
+  it("returns a typed error result (not a thrown exception) on a network-level failure", async () => {
+    cancelMock.mockRejectedValue(new Error("connect ECONNREFUSED"));
+
+    const result = await cancelUpiPaymentLink("plink_QflcnnZqCekuvL");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errorCode).toBeNull();
+      expect(result.errorDescription).toMatch(/connect ECONNREFUSED/);
+    }
   });
 });

@@ -9,9 +9,11 @@ import type { FacilitatorRedisClient } from "../src/server";
 import type { PgClient } from "../src/store/db";
 
 const createUpiPaymentLinkMock = vi.fn();
+const cancelUpiPaymentLinkMock = vi.fn();
 
 vi.mock("../src/razorpay/payment-links", () => ({
   createUpiPaymentLink: createUpiPaymentLinkMock,
+  cancelUpiPaymentLink: cancelUpiPaymentLinkMock,
 }));
 
 const { createServer } = await import("../src/server");
@@ -220,6 +222,8 @@ beforeEach(() => {
   redis = new FakeRedis();
   pg = new FakePg();
   createUpiPaymentLinkMock.mockReset();
+  cancelUpiPaymentLinkMock.mockReset();
+  cancelUpiPaymentLinkMock.mockResolvedValue({ ok: true });
   fetchImplMock = vi.fn();
 });
 
@@ -300,6 +304,34 @@ describe("POST /settle — AI hold / confirm-gate", () => {
     expect(body).toMatchObject({ success: false, errorReason: "ai-hold-timed-out", transaction: "" });
     expect(createUpiPaymentLinkMock).toHaveBeenCalledTimes(1);
     expect(await redis.get(`confirm-gate:${requestId}`)).toBe("0");
+
+    // Regression: previously this returned without ever transitioning
+    // state or writing a reconciliation record -- the request was left
+    // stuck in "pending" indefinitely with a live Payment Link.
+    expect(await redis.get(`req:${requestId}:state`)).toBe("failed");
+    expect(pg.calls).toHaveLength(1);
+
+    // Regression: the Payment Link must be actively cancelled, not left to
+    // expire on its own -- expire_by alone leaves it payable for up to ~14
+    // more minutes (Razorpay's 15-minute floor) after this request is
+    // already marked "failed".
+    expect(cancelUpiPaymentLinkMock).toHaveBeenCalledWith("plink_hold_timeout");
+  }, 10000);
+
+  it("logs but does not fail the response when cancelling the Payment Link errors after ai-hold-timed-out", async () => {
+    createUpiPaymentLinkMock.mockResolvedValue({ ok: true, paymentLinkId: "plink_cancel_fails", shortUrl: "https://rzp.io/i/cancel-fails" });
+    cancelUpiPaymentLinkMock.mockResolvedValue({ ok: false, errorCode: "BAD_REQUEST_ERROR", errorDescription: "This link has already been paid" });
+    fetchImplMock.mockResolvedValue(geminiResponse("hold"));
+    await startServer();
+
+    const requirements = buildRequirements({ maxTimeoutSeconds: 0.05 });
+    const payload = buildPayload(requirements, "order-hold-cancel-fails");
+
+    const { status, body } = await postSettle(requirements, payload);
+
+    expect(status).toBe(200);
+    expect(body).toMatchObject({ success: false, errorReason: "ai-hold-timed-out", transaction: "" });
+    expect(cancelUpiPaymentLinkMock).toHaveBeenCalledTimes(1);
   }, 10000);
 
   it("blocks the in-flight /settle call, then proceeds to settlement once a concurrent confirm-gate call flips the gate", async () => {

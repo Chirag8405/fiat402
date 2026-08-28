@@ -56,6 +56,18 @@ export interface CreateUpiPaymentLinkError {
 
 export type CreateUpiPaymentLinkResult = CreateUpiPaymentLinkSuccess | CreateUpiPaymentLinkError;
 
+export interface CancelUpiPaymentLinkSuccess {
+  ok: true;
+}
+
+export interface CancelUpiPaymentLinkError {
+  ok: false;
+  errorCode: string | null;
+  errorDescription: string;
+}
+
+export type CancelUpiPaymentLinkResult = CancelUpiPaymentLinkSuccess | CancelUpiPaymentLinkError;
+
 /** Shape of the object the Razorpay SDK rejects with for an HTTP-level API error. */
 interface RazorpaySdkErrorLike {
   statusCode: string | number;
@@ -128,6 +140,43 @@ export async function createUpiPaymentLink(
     }
     const message = err instanceof Error ? err.message : String(err);
     console.log("[razorpay] Non-SDK error:", message);
+    return { ok: false, errorCode: null, errorDescription: `Razorpay request failed: ${message}` };
+  }
+}
+
+/**
+ * Cancels a Razorpay UPI Payment Link, e.g. after an AI-hold confirmation
+ * times out (see apps/facilitator/src/server.ts's settlePayment). Not
+ * redundant with `expire_by`: Razorpay enforces a hard minimum 15-minute
+ * Payment Link lifetime (see RAZORPAY_MIN_EXPIRY_SECONDS above), so a
+ * request with a short maxTimeoutSeconds (90-180s in practice) that this
+ * facilitator has already marked "failed" internally still leaves the real
+ * Payment Link live and payable for up to ~14 more minutes if left to
+ * expire on its own -- a late payment during that window would be silently
+ * dropped by webhook-handler.ts's terminal-state check, with money moving
+ * but nothing ever reconciling it. Actively cancelling closes that window
+ * immediately instead of relying on `expire_by` alone.
+ *
+ * Best-effort by design: callers should log a failure here, not treat it as
+ * a reason to change an outcome they're already committed to returning (a
+ * cancel failing because the payer completed payment in the instant before
+ * this call is a genuine, small race, not a bug in this function).
+ */
+export async function cancelUpiPaymentLink(paymentLinkId: string): Promise<CancelUpiPaymentLinkResult> {
+  try {
+    await razorpayClient.paymentLink.cancel(paymentLinkId);
+    return { ok: true };
+  } catch (err) {
+    if (isRazorpaySdkErrorLike(err)) {
+      console.log("[razorpay] SDK error cancelling Payment Link:", JSON.stringify(err.error));
+      return {
+        ok: false,
+        errorCode: err.error.code ?? null,
+        errorDescription: err.error.description ?? "Razorpay API error with no description",
+      };
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    console.log("[razorpay] Non-SDK error cancelling Payment Link:", message);
     return { ok: false, errorCode: null, errorDescription: `Razorpay request failed: ${message}` };
   }
 }

@@ -35,7 +35,7 @@ import cors from "cors";
 import type { PaymentPayload, PaymentRequirements } from "@x402/core/types";
 import { checkDeterministicPolicy, type VelocityRedisClient } from "./policy/deterministic";
 import { getAdvisoryRecommendation } from "./policy/ai-advisory";
-import { createUpiPaymentLink } from "./razorpay/payment-links";
+import { createUpiPaymentLink, cancelUpiPaymentLink } from "./razorpay/payment-links";
 import { razorpayWebhookHandler, type WebhookRedisClient } from "./razorpay/webhook-handler";
 import {
   deriveRequestId,
@@ -475,6 +475,32 @@ export async function settlePayment(
   // function's doc comment for why (the UPI retry edge case).
   const resolutionPromise = awaitResolution(deps.redis, requestId, paymentRequirements.maxTimeoutSeconds);
 
+  // Hoisted from just after the resolution wait (where it used to live) so
+  // the ai-hold-timed-out branch below can also write a reconciliation
+  // record -- every other terminal transition in this function does, and an
+  // AI-hold timeout shouldn't be the one silent exception to that audit
+  // trail. Doesn't depend on `resolution` at all, so moving it earlier
+  // changes nothing about when it's computed relative to the actual
+  // Payment Link / policy / advisory data it reads -- all of that already
+  // exists by this point. Also doesn't delay awaitResolution's subscription
+  // above: that already happened synchronously when resolutionPromise was
+  // created, one line up.
+  const meta = await deps.redis.hgetall(requestMetaKey(requestId));
+  const baseRecord: Omit<ReconciliationRecord, "razorpayPaymentId" | "resolvedAt" | "settledAt" | "failedAt" | "finalOutcome"> = {
+    requestId,
+    txnRef: extractTxnRef(paymentPayload),
+    paymentLinkId,
+    amountPaise: paymentRequirements.amount,
+    payTo: paymentRequirements.payTo,
+    deterministicDecision: policyResult.allowed,
+    deterministicReason: policyResult.reason ?? null,
+    aiRecommendation: advisory.recommendation,
+    aiJustification: advisory.humanSummary,
+    aiProvider: advisory.provider,
+    createdAt: meta?.createdAt ?? new Date(now()).toISOString(),
+    pendingAt,
+  };
+
   // 6. AI-hold confirmation gate. Runs after the Payment Link exists
   // (created above, or joined via the idempotency branch) so a human has
   // something real to review/approve -- this is exactly the gap the old
@@ -492,27 +518,48 @@ export async function settlePayment(
   if (advisory.recommendation === "hold") {
     const gateResult = await awaitConfirmGate(deps.redis, requestId, paymentRequirements.maxTimeoutSeconds);
     if (gateResult !== "confirmed") {
+      // Previously this returned without ever transitioning state or
+      // writing a reconciliation record -- the request was left stuck in
+      // "pending" indefinitely with a live Payment Link. Close that out as
+      // a genuine terminal "failed" outcome, same as every other failure
+      // path here.
+      const failedEvent = await transitionState(deps.redis, requestId, "failed", {
+        paymentLinkId,
+        reason: "ai-hold-timed-out",
+      });
+
+      await writeReconciliationRecord(deps.pg, {
+        ...baseRecord,
+        razorpayPaymentId: null,
+        resolvedAt: failedEvent.timestamp,
+        settledAt: null,
+        failedAt: failedEvent.timestamp,
+        finalOutcome: "failed",
+      });
+
+      // Best-effort: expire_by alone isn't enough here -- Razorpay enforces
+      // a minimum 15-minute Payment Link lifetime (see
+      // RAZORPAY_MIN_EXPIRY_SECONDS above), so a request with a short
+      // maxTimeoutSeconds like this one leaves the real Payment Link
+      // payable for up to ~14 more minutes after we've already marked it
+      // "failed" -- during which a late payment would be silently dropped
+      // by webhook-handler.ts's terminal-state check (money moves, nothing
+      // reconciles it). Actively cancelling closes that window now instead
+      // of waiting on expire_by. A cancel failure (e.g. the payer completed
+      // payment in the instant before this call -- a genuine, small race)
+      // is logged, not treated as a reason to change the response below.
+      const cancelResult = await cancelUpiPaymentLink(paymentLinkId);
+      if (!cancelResult.ok) {
+        console.error(
+          `[settlePayment] failed to cancel Payment Link ${paymentLinkId} after ai-hold-timed-out for requestId=${requestId}: ${cancelResult.errorDescription}`,
+        );
+      }
+
       return settlementFailure("ai-hold-timed-out");
     }
   }
 
   const resolution = await resolutionPromise;
-
-  const meta = await deps.redis.hgetall(requestMetaKey(requestId));
-  const baseRecord: Omit<ReconciliationRecord, "razorpayPaymentId" | "resolvedAt" | "settledAt" | "failedAt" | "finalOutcome"> = {
-    requestId,
-    txnRef: extractTxnRef(paymentPayload),
-    paymentLinkId,
-    amountPaise: paymentRequirements.amount,
-    payTo: paymentRequirements.payTo,
-    deterministicDecision: policyResult.allowed,
-    deterministicReason: policyResult.reason ?? null,
-    aiRecommendation: advisory.recommendation,
-    aiJustification: advisory.humanSummary,
-    aiProvider: advisory.provider,
-    createdAt: meta?.createdAt ?? new Date(now()).toISOString(),
-    pendingAt,
-  };
 
   if (resolution.state === "approved") {
     const razorpayPaymentId = resolution.event?.meta.razorpayPaymentId ?? null;
@@ -559,6 +606,16 @@ export async function settlePayment(
   // enforced the hard maxTimeoutSeconds ceiling, so by the time we get
   // here this is just a normal, bounded HTTP response, never a hung
   // connection.
+  //
+  // FLAGGED FOLLOW-UP, not fixed here: this "timeout" outcome has the same
+  // expire_by-vs-16-minute-floor gap as the ai-hold-timed-out branch above
+  // (see cancelUpiPaymentLink's doc comment in ./razorpay/payment-links.ts)
+  // -- the Payment Link is left to expire on its own rather than actively
+  // cancelled, so it stays payable for up to ~14 more minutes after this
+  // request is already marked "failed" here, and a late payment during
+  // that window is silently dropped by webhook-handler.ts's terminal-state
+  // check. Left alone for this session; worth the same active-cancel fix
+  // in a future one.
   return settlementFailure(errorReason);
 }
 
