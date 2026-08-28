@@ -58,11 +58,33 @@ export interface WebhookRedisClient {
    *  a plain SET would otherwise silently strip it. */
   set(key: string, value: string, mode?: "KEEPTTL"): Promise<unknown>;
   publish(channel: string, message: string): Promise<number>;
+  /** Used by publishTransition to also append onto EVENTS_RECENT_LIST — see that constant's doc comment below. */
+  lpush(key: string, ...values: string[]): Promise<number>;
+  ltrim(key: string, start: number, stop: number): Promise<string>;
 }
 
 type RequestState = "created" | "pending" | "approved" | "declined" | "expired" | "settled" | "failed";
 
 const EVENTS_CHANNEL = "fiat402:events";
+
+/**
+ * Bounded recent-events list apps/dashboard/app/api/events/route.ts polls,
+ * since a plain pub/sub channel has no history for a reader that wasn't
+ * subscribed at publish time. Inlined here rather than imported from
+ * ../ws.ts, matching this module's own stated pattern (see this file's
+ * top-of-file comment) of having no dependency on state-machine.ts/ws.ts —
+ * keep the key name and cap in sync with ../ws.ts's EVENTS_RECENT_LIST /
+ * EVENTS_RECENT_LIST_MAX by hand.
+ *
+ * Before this, publishTransition only PUBLISHed to EVENTS_CHANNEL and never
+ * appended here, so "approved"/"declined" transitions (the two states this
+ * module owns) were invisible to the dashboard's poll-based /api/events --
+ * only "pending"/"settled"/"failed" (published via
+ * packages/scheme-upi/src/state-machine.ts's transitionState, which already
+ * did LPUSH/LTRIM here) ever showed up. That gap is what this addition fixes.
+ */
+const EVENTS_RECENT_LIST = "fiat402:events:recent";
+const EVENTS_RECENT_LIST_MAX = 200;
 
 /** Generous fixed TTL for the payment_id cache — see packages/scheme-upi/src/state-machine.ts's
  *  paymentIdIndexKey doc comment for why this cache exists.
@@ -154,7 +176,10 @@ async function publishTransition(
     timestamp: new Date().toISOString(),
     meta,
   };
-  await redis.publish(EVENTS_CHANNEL, JSON.stringify(message));
+  const serialized = JSON.stringify(message);
+  await redis.publish(EVENTS_CHANNEL, serialized);
+  await redis.lpush(EVENTS_RECENT_LIST, serialized);
+  await redis.ltrim(EVENTS_RECENT_LIST, 0, EVENTS_RECENT_LIST_MAX - 1);
 }
 
 const TERMINAL_STATES: ReadonlySet<string> = new Set(["settled", "failed"]);

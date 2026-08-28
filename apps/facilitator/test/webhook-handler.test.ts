@@ -11,6 +11,7 @@ const PAYMENT_ID = "pay_Qfldmt5StKZFCB";
 class FakeRedisClient implements WebhookRedisClient {
   store = new Map<string, string>();
   published: Array<{ channel: string; message: string }> = [];
+  lists = new Map<string, string[]>();
 
   async get(key: string): Promise<string | null> {
     return this.store.get(key) ?? null;
@@ -24,6 +25,19 @@ class FakeRedisClient implements WebhookRedisClient {
   async publish(channel: string, message: string): Promise<number> {
     this.published.push({ channel, message });
     return 1;
+  }
+
+  async lpush(key: string, ...values: string[]): Promise<number> {
+    const list = this.lists.get(key) ?? [];
+    list.unshift(...values);
+    this.lists.set(key, list);
+    return list.length;
+  }
+
+  async ltrim(key: string, start: number, stop: number): Promise<string> {
+    const list = this.lists.get(key) ?? [];
+    this.lists.set(key, list.slice(start, stop + 1));
+    return "OK";
   }
 }
 
@@ -155,6 +169,14 @@ describe("razorpayWebhookHandler — state transitions", () => {
       previousState: "pending",
       meta: { paymentLinkId: PAYMENT_LINK_ID, razorpayPaymentId: PAYMENT_ID },
     });
+
+    // Regression: this event must also land in fiat402:events:recent (the
+    // list apps/dashboard/app/api/events/route.ts polls), not just PUBLISH
+    // to the pub/sub channel -- previously it only did the latter, so
+    // "approved"/"declined" transitions never reached the dashboard's poll.
+    const recentList = redis.lists.get("fiat402:events:recent") ?? [];
+    expect(recentList).toHaveLength(1);
+    expect(JSON.parse(recentList[0]!)).toMatchObject({ requestId: REQUEST_ID, state: "approved" });
   });
 
   it("transitions to declined on payment.failed", async () => {
