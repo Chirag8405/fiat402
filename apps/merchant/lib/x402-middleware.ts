@@ -72,7 +72,24 @@ async function callFacilitator<T>(
     },
     body: JSON.stringify({ x402Version: X402_VERSION, paymentPayload, paymentRequirements }),
   });
-  return (await res.json()) as T;
+
+  if (!res.ok) {
+    // Read as text, not json() -- a 429/5xx body from the facilitator (or a
+    // platform-level gateway/proxy in front of it, e.g. Render rate
+    // limiting) is frequently plain text ("Too Many Requests") or an HTML
+    // error page, not JSON. Calling .json() on that throws a raw
+    // SyntaxError instead of a clean, catchable Error -- see
+    // apps/facilitator/src/policy/ai-advisory.ts's callGemini/callGroq for
+    // the same fix applied to the Gemini/Groq HTTP calls.
+    const bodyText = await res.text().catch(() => "<unreadable body>");
+    throw new Error(`Facilitator ${path} request failed with status ${res.status}: ${bodyText}`);
+  }
+
+  try {
+    return (await res.json()) as T;
+  } catch (err) {
+    throw new Error(`Facilitator ${path} response body was not valid JSON: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 
 interface ResourceInfo {
@@ -210,12 +227,27 @@ export async function withX402Payment(
   const paymentRequirements = buildUpiRequirements();
   const agentHeader = request.headers.get("X-Agent-Identifier") ?? undefined;
 
-  const verifyResult = await callFacilitator<VerifyResponseBody>("/verify", paymentPayload, paymentRequirements, agentHeader);
+  // callFacilitator throws (rather than returning a value) when the
+  // facilitator is unreachable, rate-limited, or returns a non-JSON body --
+  // per this function's own contract ("On any failure path, returns a 402
+  // directly"), that must become a clean 402 here too, not an unhandled
+  // exception that turns into Next.js's generic 500.
+  let verifyResult: VerifyResponseBody;
+  try {
+    verifyResult = await callFacilitator<VerifyResponseBody>("/verify", paymentPayload, paymentRequirements, agentHeader);
+  } catch (err) {
+    return paymentRequiredResponse(resource, err instanceof Error ? err.message : String(err));
+  }
   if (!verifyResult.isValid) {
     return paymentRequiredResponse(resource, verifyResult.invalidReason ?? "payment verification failed", verifyResult);
   }
 
-  const settleResult = await callFacilitator<SettlementResponseBody>("/settle", paymentPayload, paymentRequirements, agentHeader);
+  let settleResult: SettlementResponseBody;
+  try {
+    settleResult = await callFacilitator<SettlementResponseBody>("/settle", paymentPayload, paymentRequirements, agentHeader);
+  } catch (err) {
+    return paymentRequiredResponse(resource, err instanceof Error ? err.message : String(err));
+  }
   if (!settleResult.success) {
     return paymentRequiredResponse(resource, settleResult.errorReason ?? "payment settlement failed", settleResult);
   }

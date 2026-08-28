@@ -14,8 +14,25 @@ vi.stubGlobal("fetch", fetchMock);
 function mockFacilitatorResponses(verifyBody: unknown, settleBody?: unknown): void {
   fetchMock.mockImplementation((url: string) => {
     const body = url.endsWith("/verify") ? verifyBody : settleBody;
-    return Promise.resolve({ json: () => Promise.resolve(body) });
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve(body),
+      text: () => Promise.resolve(JSON.stringify(body)),
+    });
   });
+}
+
+/** Simulates a non-JSON error response from the facilitator, e.g. a 429 rate-limit body. */
+function mockFacilitatorNonJsonError(status: number, bodyText: string): void {
+  fetchMock.mockImplementation(() =>
+    Promise.resolve({
+      ok: false,
+      status,
+      json: () => Promise.reject(new SyntaxError(`Unexpected token in "${bodyText}"`)),
+      text: () => Promise.resolve(bodyText),
+    }),
+  );
 }
 
 const { GET } = await import("../app/api/premium-data/route");
@@ -148,6 +165,25 @@ describe("GET /api/premium-data — facilitator settle fails", () => {
     expect(response.status).toBe(402);
     const body = await response.json();
     expect(body.errorReason).toBe("payment-declined");
+  });
+});
+
+describe("GET /api/premium-data — facilitator returns a non-JSON error", () => {
+  it("returns 402, not a 500/unhandled exception, when /verify 429s with a plain-text body", async () => {
+    // Regression: a 429/5xx from the facilitator (or a platform-level
+    // gateway in front of it) is frequently plain text ("Too Many
+    // Requests"), not JSON -- calling .json() on it unconditionally used to
+    // throw an unhandled SyntaxError instead of the clean 402 this route
+    // always documents itself as returning on any failure path.
+    mockFacilitatorNonJsonError(429, "Too Many Requests");
+
+    const header = Buffer.from(JSON.stringify(validPaymentPayload()), "utf-8").toString("base64");
+    const response = await GET(requestWithSignature(header));
+
+    expect(response.status).toBe(402);
+    const challenge = decodeHeader<{ error?: string }>(response, "PAYMENT-REQUIRED");
+    expect(challenge.error).toContain("429");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
 
