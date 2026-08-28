@@ -281,21 +281,27 @@ describe("POST /settle — deterministic rejection", () => {
 });
 
 describe("POST /settle — AI hold / confirm-gate", () => {
-  it("returns ai-hold-pending-review immediately when the confirm-gate is not set", async () => {
+  it("still creates the Payment Link on a hold, then returns ai-hold-timed-out if the gate is never confirmed", async () => {
+    // A hold must only add friction, never block the request from reaching
+    // a payable state -- the Payment Link has to exist regardless, so a
+    // human actually has something to confirm.
+    createUpiPaymentLinkMock.mockResolvedValue({ ok: true, paymentLinkId: "plink_hold_timeout", shortUrl: "https://rzp.io/i/hold-timeout" });
     fetchImplMock.mockResolvedValue(geminiResponse("hold"));
     await startServer();
 
-    const requirements = buildRequirements();
+    const requirements = buildRequirements({ maxTimeoutSeconds: 0.05 });
     const payload = buildPayload(requirements, "order-hold-1");
+    const requestId = deriveRequestId(requirements, payload);
 
     const { status, body } = await postSettle(requirements, payload);
 
     expect(status).toBe(200);
-    expect(body).toMatchObject({ success: false, errorReason: "ai-hold-pending-review", transaction: "" });
-    expect(createUpiPaymentLinkMock).not.toHaveBeenCalled();
-  });
+    expect(body).toMatchObject({ success: false, errorReason: "ai-hold-timed-out", transaction: "" });
+    expect(createUpiPaymentLinkMock).toHaveBeenCalledTimes(1);
+    expect(await redis.get(`confirm-gate:${requestId}`)).toBe("0");
+  }, 10000);
 
-  it("proceeds to Payment Link creation once the confirm-gate is set", async () => {
+  it("blocks the in-flight /settle call, then proceeds to settlement once a concurrent confirm-gate call flips the gate", async () => {
     createUpiPaymentLinkMock.mockResolvedValue({ ok: true, paymentLinkId: "plink_gated", shortUrl: "https://rzp.io/i/gated" });
     fetchImplMock.mockResolvedValue(geminiResponse("hold"));
     await startServer();
@@ -304,12 +310,21 @@ describe("POST /settle — AI hold / confirm-gate", () => {
     const payload = buildPayload(requirements, "order-hold-2");
     const requestId = deriveRequestId(requirements, payload);
 
+    const settlePromise = postSettle(requirements, payload);
+
+    // The Payment Link already exists while /settle is still blocked on the
+    // confirm-gate wait -- this is exactly the gap the old
+    // reject-before-any-Payment-Link-exists behavior left open.
+    await waitFor(() => createUpiPaymentLinkMock.mock.calls.length === 1);
+    expect(await redis.get(`confirm-gate:${requestId}`)).toBe("0");
+
     const gateRes = await fetch(`${baseUrl}/internal/confirm-gate/${requestId}`, { method: "POST" });
     expect(gateRes.status).toBe(200);
 
-    const settlePromise = postSettle(requirements, payload);
-
-    await waitFor(() => createUpiPaymentLinkMock.mock.calls.length === 1);
+    // The confirm endpoint's publish resolves the still-in-flight
+    // awaitConfirmGate call; /settle then proceeds into its normal
+    // awaitResolution wait for the actual payment, exactly as the non-hold
+    // path does.
     await redis.publishFiatEvent({
       requestId,
       state: "approved",

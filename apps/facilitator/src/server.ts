@@ -69,6 +69,125 @@ function confirmGateKey(requestId: string): string {
 }
 
 /**
+ * Dedicated pub/sub channel for confirm-gate flips, published by POST
+ * /internal/confirm-gate/:requestId (below) and awaited by
+ * awaitConfirmGate. Deliberately separate from ./ws.ts's fiat402:events:
+ * a gate flip isn't a settlement state transition (FiatEvent's schema), it's
+ * a different concern owned entirely by this module.
+ */
+const CONFIRM_GATE_CHANNEL = "fiat402:confirm-gate";
+
+interface ConfirmGateMessage {
+  requestId: string;
+}
+
+function isConfirmGateMessageLike(value: unknown): value is ConfirmGateMessage {
+  return !!value && typeof value === "object" && typeof (value as ConfirmGateMessage).requestId === "string";
+}
+
+/**
+ * Bounded, pub/sub-driven wait for a human to flip confirm-gate:{requestId}
+ * to "1" via POST /internal/confirm-gate/:requestId. Structurally mirrors
+ * state-machine.ts's awaitResolution (setTimeout + subscribe + a `finish`
+ * guard so only the first of the two ever settles the promise), but is not
+ * built on top of it: this waits on a gate flip, not a settlement state
+ * transition, and CONFIRM_GATE_CHANNEL is a separate channel from
+ * fiat402:events for exactly that reason.
+ *
+ * NEVER rejects. POST /settle's route handler is `void (async () => {...})()`
+ * with no top-level catch -- an unhandled rejection here would mean the HTTP
+ * request never gets a response at all, which is strictly worse than a
+ * clean settlementFailure. So every failure mode (redis.subscribe() throwing
+ * synchronously, e.g. Redis unreachable; unsubscribe() failing during
+ * cleanup; the defensive initial gate check below failing) is caught and
+ * logged, never left to propagate, and resolves "timed-out" rather than
+ * hanging or rejecting.
+ *
+ * The initial `redis.get(confirmGateKey(...))` check right after
+ * subscribing closes the race where a human confirms (and the confirm
+ * endpoint publishes) in the gap between this request creating the Payment
+ * Link and this function's subscription becoming active: redis.subscribe()
+ * registers the listener synchronously, so any publish from that point on
+ * is still caught by it regardless; the immediately-following get() only
+ * needs to catch a confirmation that landed before subscribe() returned.
+ */
+async function awaitConfirmGate(
+  redis: FacilitatorRedisClient,
+  requestId: string,
+  maxTimeoutSeconds: number,
+): Promise<"confirmed" | "timed-out"> {
+  return new Promise<"confirmed" | "timed-out">(resolve => {
+    let settled = false;
+    let unsubscribe: () => void = () => {};
+
+    const finish = (result: "confirmed" | "timed-out"): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try {
+        unsubscribe();
+      } catch (err) {
+        console.error(
+          `[awaitConfirmGate] unsubscribe failed for requestId=${requestId}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      resolve(result);
+    };
+
+    const timer = setTimeout(() => {
+      finish("timed-out");
+    }, maxTimeoutSeconds * 1000);
+
+    try {
+      const subscription = redis.subscribe([CONFIRM_GATE_CHANNEL]);
+      unsubscribe = () => void subscription.unsubscribe();
+
+      subscription.on("message", (message: unknown) => {
+        let parsed: unknown = message;
+        if (typeof message === "string") {
+          try {
+            parsed = JSON.parse(message);
+          } catch (err) {
+            console.error(
+              `[awaitConfirmGate] JSON.parse failed for message on channel "${CONFIRM_GATE_CHANNEL}": ${err instanceof Error ? err.message : String(err)}`,
+            );
+            return;
+          }
+        }
+        if (!isConfirmGateMessageLike(parsed) || parsed.requestId !== requestId) return;
+        finish("confirmed");
+      });
+
+      subscription.on("error", (err: unknown) => {
+        // Logged, not finish()ed -- a transient subscription error doesn't
+        // mean the confirmation was missed; the timeout above is the real
+        // backstop, so this must not resolve early as anything but a
+        // genuine confirmation or a genuine timeout.
+        console.error(
+          `[awaitConfirmGate] subscription error for requestId=${requestId}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      });
+
+      redis
+        .get(confirmGateKey(requestId))
+        .then(gate => {
+          if (gate === "1") finish("confirmed");
+        })
+        .catch(err => {
+          console.error(
+            `[awaitConfirmGate] initial gate check failed for requestId=${requestId}: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        });
+    } catch (err) {
+      console.error(
+        `[awaitConfirmGate] redis.subscribe failed for requestId=${requestId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      finish("timed-out");
+    }
+  });
+}
+
+/**
  * Pulls the agent-declared `agentMetadata` side-channel out of
  * `PaymentPayload.extensions` (see x402-upi-client/src/upi-scheme-client.ts
  * for how a client populates it) so it can be forwarded into
@@ -264,22 +383,25 @@ export async function settlePayment(
   // confirm-gate check below and every subsequent step.
   const requestId = deriveRequestId(paymentRequirements, paymentPayload);
 
-  // 2. AI advisory. "hold" requires the demo confirm-gate to already be
-  // set before this facilitator will create a Payment Link.
+  // 2. AI advisory. "hold" adds friction -- a human must confirm via
+  // POST /internal/confirm-gate/:requestId before the bounded wait below
+  // lets this call proceed -- but it must NOT block the request from ever
+  // reaching a payable state: the Payment Link is still created below
+  // regardless, so there's something for a human to actually approve.
   const advisory = await getAdvisoryRecommendation(paymentRequirements, paymentPayload, {
     fetchImpl: deps.fetchImpl,
     agentMetadata: extractAgentMetadata(paymentPayload),
   });
 
   if (advisory.recommendation === "hold") {
-    const gate = await deps.redis.get(confirmGateKey(requestId));
-    if (gate !== "1") {
-      // Demo hook: a real deployment would have a review UI that sets
-      // this flag once a human has reviewed the hold/flag. Here it's set
-      // via POST /internal/confirm-gate/:requestId below. We do not
-      // block waiting for it -- an unset gate is a clean, immediate
-      // rejection, not a hung request.
-      return settlementFailure("ai-hold-pending-review");
+    // Only initialize to "0" if not already "1" -- a blind SET here could
+    // otherwise clobber a confirmation a human already recorded in the gap
+    // between that action and this check (e.g. a very fast manual confirm,
+    // or one from a concurrent /settle call that reached this point first).
+    const existingGate = await deps.redis.get(confirmGateKey(requestId));
+    if (existingGate !== "1") {
+      await deps.redis.set(confirmGateKey(requestId), "0");
+      await deps.redis.expire(confirmGateKey(requestId), paymentRequirements.maxTimeoutSeconds + TTL_BUFFER_SECONDS);
     }
   }
 
@@ -355,7 +477,21 @@ export async function settlePayment(
     pendingAt = pendingEvent.timestamp;
   }
 
-  // 5. Bounded, pub/sub-driven wait -- delegated entirely to
+  // 5. AI-hold confirmation gate. Runs after the Payment Link exists
+  // (created above, or joined via the idempotency branch) so a human has
+  // something real to review/approve -- this is exactly the gap the old
+  // short-circuit-before-any-Payment-Link-exists behavior left open. Bounded
+  // by the same maxTimeoutSeconds as the payment wait below; a timeout here
+  // is a clean settlementFailure, not a hang -- see awaitConfirmGate's doc
+  // comment for the full failure-mode reasoning.
+  if (advisory.recommendation === "hold") {
+    const gateResult = await awaitConfirmGate(deps.redis, requestId, paymentRequirements.maxTimeoutSeconds);
+    if (gateResult !== "confirmed") {
+      return settlementFailure("ai-hold-timed-out");
+    }
+  }
+
+  // 6. Bounded, pub/sub-driven wait -- delegated entirely to
   // state-machine.ts's awaitResolution. Not reimplemented here as a
   // poll loop; see that function's doc comment for why (the UPI retry
   // edge case).
@@ -570,7 +706,12 @@ export function createServer(deps: FacilitatorDeps): Express {
           return;
         }
       }
-      await deps.redis.set(confirmGateKey(String(req.params.requestId)), "1");
+      const requestId = String(req.params.requestId);
+      await deps.redis.set(confirmGateKey(requestId), "1");
+      // Publish so a live awaitConfirmGate call resolves immediately
+      // instead of riding out the full timeout -- see that function's doc
+      // comment in this file.
+      await deps.redis.publish(CONFIRM_GATE_CHANNEL, JSON.stringify({ requestId }));
       res.status(200).send("ok");
     })();
   });
