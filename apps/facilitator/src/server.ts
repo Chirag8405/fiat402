@@ -69,6 +69,23 @@ function confirmGateKey(requestId: string): string {
 }
 
 /**
+ * Pulls the agent-declared `agentMetadata` side-channel out of
+ * `PaymentPayload.extensions` (see x402-upi-client/src/upi-scheme-client.ts
+ * for how a client populates it) so it can be forwarded into
+ * getAdvisoryRecommendation's context for the semanticMatch check. Absent or
+ * malformed extensions just mean no agentMetadata is available -- the AI
+ * advisory layer already treats a missing taskContext as "not provided" and
+ * fails closed on ambiguity, so no extra validation is needed here.
+ */
+function extractAgentMetadata(paymentPayload: PaymentPayload): Record<string, unknown> | undefined {
+  const extensions = (paymentPayload as { extensions?: Record<string, unknown> }).extensions;
+  const agentMetadata = extensions?.agentMetadata;
+  return agentMetadata && typeof agentMetadata === "object"
+    ? (agentMetadata as Record<string, unknown>)
+    : undefined;
+}
+
+/**
  * Full Redis surface every handler in this file needs: the state machine's
  * surface (state, meta, pub/sub), the velocity check's sorted-set surface,
  * and the webhook handler's surface. The real Upstash client
@@ -186,19 +203,22 @@ export async function verifyPayment(
 
   const advisory = await getAdvisoryRecommendation(paymentRequirements, paymentPayload, {
     fetchImpl: deps.fetchImpl,
+    agentMetadata: extractAgentMetadata(paymentPayload),
   });
 
   // isValid is always true once the deterministic engine passes,
   // regardless of the AI recommendation. Per CLAUDE.md: "AI output goes
   // in extra, never overrides isValid downward at this stage." AI
-  // advisory only affects /settle (the confirm-gate hold/flag flow
-  // below) — /verify's validity is gated exclusively by the
-  // deterministic policy engine, which is final authority.
+  // advisory only affects /settle (the confirm-gate hold flow below) —
+  // /verify's validity is gated exclusively by the deterministic policy
+  // engine, which is final authority.
   return {
     isValid: true,
     extra: {
       aiRecommendation: advisory.recommendation,
-      aiJustification: advisory.justification,
+      aiSemanticMatch: advisory.semanticMatch,
+      aiReasoning: advisory.reasoning,
+      aiHumanSummary: advisory.humanSummary,
       aiProvider: advisory.provider,
     },
   };
@@ -244,13 +264,14 @@ export async function settlePayment(
   // confirm-gate check below and every subsequent step.
   const requestId = deriveRequestId(paymentRequirements, paymentPayload);
 
-  // 2. AI advisory. "hold"/"flag" require the demo confirm-gate to
-  // already be set before this facilitator will create a Payment Link.
+  // 2. AI advisory. "hold" requires the demo confirm-gate to already be
+  // set before this facilitator will create a Payment Link.
   const advisory = await getAdvisoryRecommendation(paymentRequirements, paymentPayload, {
     fetchImpl: deps.fetchImpl,
+    agentMetadata: extractAgentMetadata(paymentPayload),
   });
 
-  if (advisory.recommendation === "hold" || advisory.recommendation === "flag") {
+  if (advisory.recommendation === "hold") {
     const gate = await deps.redis.get(confirmGateKey(requestId));
     if (gate !== "1") {
       // Demo hook: a real deployment would have a review UI that sets
@@ -311,8 +332,19 @@ export async function settlePayment(
 
     paymentLinkId = linkResult.paymentLinkId;
     const pendingEvent = await transitionState(deps.redis, requestId, "pending", { paymentLinkId }, {
-      aiRecommendation: advisory.recommendation,
-      aiJustification: advisory.justification,
+      // FiatEvent (./ws.ts) deliberately keeps the "approve"|"hold"
+      // vocabulary for aiRecommendation -- see that file's doc comment on
+      // the field for why this translation is a permanent compatibility
+      // shim (dashboard UI already keys off "approve"), not a stopgap.
+      aiRecommendation: advisory.recommendation === "proceed" ? "approve" : "hold",
+      aiSemanticMatch: advisory.semanticMatch,
+      // aiJustification is kept for existing dashboard call sites;
+      // aiHumanSummary carries the same content under the new field name.
+      // aiReasoning is the separate, technical/log-facing string -- not
+      // collapsed into either of the human-facing fields above.
+      aiJustification: advisory.humanSummary,
+      aiHumanSummary: advisory.humanSummary,
+      aiReasoning: advisory.reasoning,
       aiProvider: advisory.provider,
       // Always "allowed" here: an earlier `!policyResult.allowed` already
       // returned above, so reaching this line means the deterministic
@@ -339,7 +371,7 @@ export async function settlePayment(
     deterministicDecision: policyResult.allowed,
     deterministicReason: policyResult.reason ?? null,
     aiRecommendation: advisory.recommendation,
-    aiJustification: advisory.justification,
+    aiJustification: advisory.humanSummary,
     aiProvider: advisory.provider,
     createdAt: meta?.createdAt ?? new Date(now()).toISOString(),
     pendingAt,

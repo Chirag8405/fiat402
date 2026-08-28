@@ -159,12 +159,19 @@ function buildPayload(requirements: PaymentRequirements, txnRef: string): Paymen
   } as PaymentPayload;
 }
 
-function geminiResponse(recommendation: "approve" | "hold" | "flag", justification = "test justification"): Response {
+function geminiResponse(
+  recommendation: "hold" | "proceed",
+  humanSummary = "test human summary",
+  semanticMatch = true,
+  reasoning = "test reasoning",
+): Response {
   return {
     ok: true,
     status: 200,
     json: async () => ({
-      candidates: [{ content: { parts: [{ text: JSON.stringify({ recommendation, justification }) }] } }],
+      candidates: [
+        { content: { parts: [{ text: JSON.stringify({ recommendation, semanticMatch, reasoning, humanSummary }) }] } },
+      ],
     }),
   } as Response;
 }
@@ -225,7 +232,7 @@ afterEach(async () => {
 describe("POST /settle — happy path", () => {
   it("creates a Payment Link and returns success once the resolution resolves approved", async () => {
     createUpiPaymentLinkMock.mockResolvedValue({ ok: true, paymentLinkId: "plink_happy", shortUrl: "https://rzp.io/i/happy" });
-    fetchImplMock.mockResolvedValue(geminiResponse("approve"));
+    fetchImplMock.mockResolvedValue(geminiResponse("proceed"));
     await startServer();
 
     const requirements = buildRequirements();
@@ -319,7 +326,7 @@ describe("POST /settle — AI hold / confirm-gate", () => {
 describe("POST /settle — timeout", () => {
   it("resolves cleanly as a 402-equivalent SettlementResponse, not a hung connection, when awaitResolution times out", async () => {
     createUpiPaymentLinkMock.mockResolvedValue({ ok: true, paymentLinkId: "plink_timeout", shortUrl: "https://rzp.io/i/timeout" });
-    fetchImplMock.mockResolvedValue(geminiResponse("approve"));
+    fetchImplMock.mockResolvedValue(geminiResponse("proceed"));
     await startServer();
 
     const requirements = buildRequirements({ maxTimeoutSeconds: 0.05 });
@@ -372,7 +379,7 @@ describe("x402Version validation", () => {
 describe("POST /settle — concurrent requests for the same logical request", () => {
   it("only creates one Payment Link; the second call joins the existing resolution", async () => {
     createUpiPaymentLinkMock.mockResolvedValue({ ok: true, paymentLinkId: "plink_concurrent", shortUrl: "https://rzp.io/i/concurrent" });
-    fetchImplMock.mockResolvedValue(geminiResponse("approve"));
+    fetchImplMock.mockResolvedValue(geminiResponse("proceed"));
     await startServer();
 
     const requirements = buildRequirements();

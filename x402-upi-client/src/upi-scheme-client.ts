@@ -73,6 +73,18 @@ import type {
 } from "@x402/core/types";
 import type { UpiPaymentPayload, UpiSchemeClientInterface } from "@fiat402/scheme-upi/src/types";
 
+/**
+ * Agent-declared context for the AI advisory layer's semanticMatch check
+ * (apps/facilitator/src/policy/ai-advisory.ts): `taskContext` is the calling
+ * agent's own plain-language statement of what it's trying to do, compared
+ * server-side against the merchant/description declared in
+ * PaymentRequirements.extra. Extra keys are passed through unmodified.
+ */
+export interface UpiAgentMetadata {
+  taskContext: string;
+  [key: string]: unknown;
+}
+
 /** Options accepted by UpiSchemeClient's constructor. */
 export interface UpiSchemeClientOptions {
   /**
@@ -82,6 +94,17 @@ export interface UpiSchemeClientOptions {
    * genuinely optional here, not a stand-in for a missing required field.
    */
   payerVpa?: string;
+
+  /**
+   * Optional agent-declared task context, echoed into
+   * `PaymentPayloadResult.extensions.agentMetadata` on the wire. Not part of
+   * the closed UpiPaymentPayload shape (packages/scheme-upi/src/types.ts)
+   * since it isn't a protocol/scheme field — it's a side channel the
+   * facilitator's AI advisory layer reads, per @x402/core/types'
+   * `extensions?: Record<string, unknown>` on both PaymentPayloadResult and
+   * PaymentPayload.
+   */
+  agentMetadata?: UpiAgentMetadata;
 }
 
 /**
@@ -136,6 +159,9 @@ export class UpiSchemeClient implements UpiSchemeClientInterface {
       // UpiPaymentPayload has no index signature (it is a closed, documented shape), so
       // this cast just bridges that gap — the runtime value is unchanged.
       payload: payload as Record<string, unknown>,
+      ...(this.options?.agentMetadata
+        ? { extensions: { agentMetadata: this.options.agentMetadata } }
+        : {}),
     };
   }
 }

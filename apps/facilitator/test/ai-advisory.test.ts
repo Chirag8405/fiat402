@@ -41,6 +41,16 @@ function groqBody(text: string) {
   return { choices: [{ message: { content: text } }] };
 }
 
+/** Convenience for building a well-formed provider JSON response body. */
+function advisoryJson(overrides: {
+  recommendation: "hold" | "proceed";
+  semanticMatch: boolean;
+  reasoning: string;
+  humanSummary: string;
+}) {
+  return JSON.stringify(overrides);
+}
+
 const ORIGINAL_ENV = { ...process.env };
 
 beforeEach(() => {
@@ -60,15 +70,33 @@ describe("getAdvisoryRecommendation", () => {
     const fetchImpl = vi.fn(async (url: string | URL) => {
       const urlStr = String(url);
       if (urlStr.includes("generativelanguage.googleapis.com")) {
-        return jsonResponse(geminiBody(JSON.stringify({ recommendation: "approve", justification: "Looks routine." })));
+        return jsonResponse(
+          geminiBody(
+            advisoryJson({
+              recommendation: "proceed",
+              semanticMatch: true,
+              reasoning: "Task context matches declared merchant/description.",
+              humanSummary: "Looks routine.",
+            }),
+          ),
+        );
       }
       throw new Error("should not call Groq when Gemini succeeds");
     });
-    const context: AdvisoryContext = { fetchImpl: fetchImpl as unknown as typeof fetch };
+    const context: AdvisoryContext = {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      agentMetadata: { taskContext: "Buying one cup of chai from Acme Chai Stall" },
+    };
 
     const result = await getAdvisoryRecommendation(requirements, payload, context);
 
-    expect(result).toEqual({ recommendation: "approve", justification: "Looks routine.", provider: "gemini" });
+    expect(result).toEqual({
+      recommendation: "proceed",
+      semanticMatch: true,
+      reasoning: "Task context matches declared merchant/description.",
+      humanSummary: "Looks routine.",
+      provider: "gemini",
+    });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
@@ -81,7 +109,16 @@ describe("getAdvisoryRecommendation", () => {
         throw new Error("network error");
       }
       if (urlStr.includes("api.groq.com")) {
-        return jsonResponse(groqBody(JSON.stringify({ recommendation: "flag", justification: "Unusual pattern." })));
+        return jsonResponse(
+          groqBody(
+            advisoryJson({
+              recommendation: "hold",
+              semanticMatch: false,
+              reasoning: "Unusual pattern.",
+              humanSummary: "This looks unusual — please review before approving.",
+            }),
+          ),
+        );
       }
       throw new Error(`unexpected url: ${urlStr}`);
     });
@@ -89,11 +126,17 @@ describe("getAdvisoryRecommendation", () => {
 
     const result = await getAdvisoryRecommendation(requirements, payload, context);
 
-    expect(result).toEqual({ recommendation: "flag", justification: "Unusual pattern.", provider: "groq" });
+    expect(result).toEqual({
+      recommendation: "hold",
+      semanticMatch: false,
+      reasoning: "Unusual pattern.",
+      humanSummary: "This looks unusual — please review before approving.",
+      provider: "groq",
+    });
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
-  it("returns fail-closed hold when both providers fail", async () => {
+  it("returns fail-closed hold with semanticMatch: false when both providers fail", async () => {
     const requirements = buildRequirements();
     const payload = buildPayload(requirements);
     const fetchImpl = vi.fn(async () => {
@@ -105,7 +148,9 @@ describe("getAdvisoryRecommendation", () => {
 
     expect(result).toEqual({
       recommendation: "hold",
-      justification: "AI advisory unavailable — defaulting to hold per fail-closed policy",
+      semanticMatch: false,
+      reasoning: "AI unavailable — fail-closed",
+      humanSummary: "AI verification unavailable — review this payment manually before approving.",
       provider: "fail-closed",
     });
     expect(fetchImpl).toHaveBeenCalledTimes(2);
@@ -117,11 +162,20 @@ describe("getAdvisoryRecommendation", () => {
     const fetchImpl = vi.fn(async (url: string | URL) => {
       const urlStr = String(url);
       if (urlStr.includes("generativelanguage.googleapis.com")) {
-        // Not JSON, not one of approve/hold/flag anywhere parseable.
+        // Not JSON, not parseable into the required shape.
         return jsonResponse(geminiBody("I think this transaction seems fine, probably."));
       }
       if (urlStr.includes("api.groq.com")) {
-        return jsonResponse(groqBody(JSON.stringify({ recommendation: "hold", justification: "Needs human review." })));
+        return jsonResponse(
+          groqBody(
+            advisoryJson({
+              recommendation: "hold",
+              semanticMatch: false,
+              reasoning: "Needs human review.",
+              humanSummary: "Please review this payment before approving.",
+            }),
+          ),
+        );
       }
       throw new Error(`unexpected url: ${urlStr}`);
     });
@@ -129,8 +183,8 @@ describe("getAdvisoryRecommendation", () => {
 
     const result = await getAdvisoryRecommendation(requirements, payload, context);
 
-    expect(result).toEqual({ recommendation: "hold", justification: "Needs human review.", provider: "groq" });
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(result.recommendation).toBe("hold");
+    expect(result.provider).toBe("groq");
   });
 
   it("treats a recommendation value outside the enum as a failure and falls through", async () => {
@@ -139,10 +193,28 @@ describe("getAdvisoryRecommendation", () => {
     const fetchImpl = vi.fn(async (url: string | URL) => {
       const urlStr = String(url);
       if (urlStr.includes("generativelanguage.googleapis.com")) {
-        return jsonResponse(geminiBody(JSON.stringify({ recommendation: "reject", justification: "Not a valid enum value." })));
+        return jsonResponse(
+          geminiBody(
+            JSON.stringify({
+              recommendation: "approve", // no longer a valid enum value
+              semanticMatch: true,
+              reasoning: "Not a valid enum value.",
+              humanSummary: "Not a valid enum value.",
+            }),
+          ),
+        );
       }
       if (urlStr.includes("api.groq.com")) {
-        return jsonResponse(groqBody(JSON.stringify({ recommendation: "approve", justification: "All clear." })));
+        return jsonResponse(
+          groqBody(
+            advisoryJson({
+              recommendation: "proceed",
+              semanticMatch: true,
+              reasoning: "All clear.",
+              humanSummary: "All clear.",
+            }),
+          ),
+        );
       }
       throw new Error(`unexpected url: ${urlStr}`);
     });
@@ -150,19 +222,31 @@ describe("getAdvisoryRecommendation", () => {
 
     const result = await getAdvisoryRecommendation(requirements, payload, context);
 
-    expect(result).toEqual({ recommendation: "approve", justification: "All clear.", provider: "groq" });
+    expect(result.recommendation).toBe("proceed");
+    expect(result.provider).toBe("groq");
   });
 
-  it("treats an empty response body as a failure and falls through", async () => {
+  it("treats a missing semanticMatch field as a failure and falls through", async () => {
     const requirements = buildRequirements();
     const payload = buildPayload(requirements);
     const fetchImpl = vi.fn(async (url: string | URL) => {
       const urlStr = String(url);
       if (urlStr.includes("generativelanguage.googleapis.com")) {
-        return jsonResponse(geminiBody(""));
+        return jsonResponse(
+          geminiBody(JSON.stringify({ recommendation: "proceed", reasoning: "Fine.", humanSummary: "Fine." })),
+        );
       }
       if (urlStr.includes("api.groq.com")) {
-        return jsonResponse(groqBody(JSON.stringify({ recommendation: "approve", justification: "Fine." })));
+        return jsonResponse(
+          groqBody(
+            advisoryJson({
+              recommendation: "proceed",
+              semanticMatch: true,
+              reasoning: "Fine.",
+              humanSummary: "Fine.",
+            }),
+          ),
+        );
       }
       throw new Error(`unexpected url: ${urlStr}`);
     });
@@ -170,7 +254,7 @@ describe("getAdvisoryRecommendation", () => {
 
     const result = await getAdvisoryRecommendation(requirements, payload, context);
 
-    expect(result).toEqual({ recommendation: "approve", justification: "Fine.", provider: "groq" });
+    expect(result.provider).toBe("groq");
   });
 
   it("treats a non-OK HTTP response as a failure and falls through", async () => {
@@ -182,7 +266,16 @@ describe("getAdvisoryRecommendation", () => {
         return jsonResponse({ error: "rate limited" }, false, 429);
       }
       if (urlStr.includes("api.groq.com")) {
-        return jsonResponse(groqBody(JSON.stringify({ recommendation: "hold", justification: "Deferring to Groq." })));
+        return jsonResponse(
+          groqBody(
+            advisoryJson({
+              recommendation: "hold",
+              semanticMatch: false,
+              reasoning: "Deferring to Groq.",
+              humanSummary: "Deferring to Groq.",
+            }),
+          ),
+        );
       }
       throw new Error(`unexpected url: ${urlStr}`);
     });
@@ -190,7 +283,8 @@ describe("getAdvisoryRecommendation", () => {
 
     const result = await getAdvisoryRecommendation(requirements, payload, context);
 
-    expect(result).toEqual({ recommendation: "hold", justification: "Deferring to Groq.", provider: "groq" });
+    expect(result.recommendation).toBe("hold");
+    expect(result.provider).toBe("groq");
   });
 
   it("times out a slow Gemini response rather than hanging, and does not double-count a late reply", async () => {
@@ -207,7 +301,18 @@ describe("getAdvisoryRecommendation", () => {
         });
       }
       if (urlStr.includes("api.groq.com")) {
-        return Promise.resolve(jsonResponse(groqBody(JSON.stringify({ recommendation: "flag", justification: "Fell back after timeout." }))));
+        return Promise.resolve(
+          jsonResponse(
+            groqBody(
+              advisoryJson({
+                recommendation: "hold",
+                semanticMatch: false,
+                reasoning: "Fell back after timeout.",
+                humanSummary: "Fell back after timeout.",
+              }),
+            ),
+          ),
+        );
       }
       return Promise.reject(new Error(`unexpected url: ${urlStr}`));
     });
@@ -217,9 +322,55 @@ describe("getAdvisoryRecommendation", () => {
     await vi.advanceTimersByTimeAsync(5000);
     const result = await resultPromise;
 
-    expect(result).toEqual({ recommendation: "flag", justification: "Fell back after timeout.", provider: "groq" });
+    expect(result.recommendation).toBe("hold");
+    expect(result.provider).toBe("groq");
     expect(fetchImpl).toHaveBeenCalledTimes(2);
 
     vi.useRealTimers();
+  });
+
+  it("semanticMatch: false when the actual taskContext conflicts with the declared merchant/description", async () => {
+    // Declared: a chai stall selling one cup of chai. Actual (agent's own
+    // stated intent): booking a flight. These are unrelated, so the prompt
+    // sent to the provider must carry both, and a provider recognizing the
+    // mismatch should report semanticMatch: false even while still being
+    // free to pick either recommendation value.
+    const requirements = buildRequirements({
+      extra: { merchantName: "Acme Chai Stall", description: "One cup of chai" },
+    });
+    const payload = buildPayload(requirements);
+
+    let capturedPrompt = "";
+    const fetchImpl = vi.fn(async (url: string | URL, init?: RequestInit) => {
+      const urlStr = String(url);
+      if (urlStr.includes("generativelanguage.googleapis.com")) {
+        const body = JSON.parse(String(init?.body));
+        capturedPrompt = body.contents[0].parts[0].text;
+        return jsonResponse(
+          geminiBody(
+            advisoryJson({
+              recommendation: "hold",
+              semanticMatch: false,
+              reasoning: "Declared merchant sells chai; actual task context is booking a flight — unrelated.",
+              humanSummary: "This payment's stated purpose doesn't match the merchant — please review.",
+            }),
+          ),
+        );
+      }
+      throw new Error("should not call Groq when Gemini succeeds");
+    });
+    const context: AdvisoryContext = {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      agentMetadata: { taskContext: "Booking a one-way flight to Goa" },
+    };
+
+    const result = await getAdvisoryRecommendation(requirements, payload, context);
+
+    expect(result.semanticMatch).toBe(false);
+    expect(result.provider).toBe("gemini");
+    // The declared and actual intents must both actually reach the provider.
+    expect(capturedPrompt).toContain("Acme Chai Stall");
+    expect(capturedPrompt).toContain("One cup of chai");
+    expect(capturedPrompt).toContain("Booking a one-way flight to Goa");
   });
 });

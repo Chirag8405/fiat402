@@ -21,8 +21,25 @@ export interface FiatEvent {
     razorpayPaymentId: string | null;
     reason: string | null;
   };
-  aiRecommendation?: "approve" | "hold" | "flag";
+  /**
+   * aiRecommendation intentionally keeps the "approve"/"hold" vocabulary
+   * ("flag" removed -- dead value, never produced by the facilitator's
+   * AdvisoryRecommendation type) -- see apps/facilitator/src/ws.ts's
+   * FiatEvent doc comment for why the facilitator's internal "proceed" is
+   * translated to "approve" before publishing, and why that's a deliberate,
+   * permanent shim rather than a stopgap.
+   *
+   * aiJustification is kept for this app's existing call sites (DecisionPanel,
+   * app/page.tsx); aiHumanSummary carries the same content under the new
+   * field name for code migrating off aiJustification. aiReasoning is a
+   * separate, technical/log-facing string -- not the same audience as either
+   * human-facing field above.
+   */
+  aiRecommendation?: "approve" | "hold";
+  aiSemanticMatch?: boolean;
   aiJustification?: string;
+  aiHumanSummary?: string;
+  aiReasoning?: string;
   aiProvider?: string;
   deterministicDecision?: "allowed" | "rejected";
   deterministicReason?: string;

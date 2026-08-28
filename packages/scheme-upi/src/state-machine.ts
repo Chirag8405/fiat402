@@ -201,7 +201,17 @@ export async function recordPaymentLinkCreated(
 
 /** The optional, non-`meta` fields transitionState's `extra` parameter may merge into the published event. */
 export type TransitionExtra = Partial<
-  Pick<FiatEvent, "aiRecommendation" | "aiJustification" | "aiProvider" | "deterministicDecision" | "deterministicReason">
+  Pick<
+    FiatEvent,
+    | "aiRecommendation"
+    | "aiSemanticMatch"
+    | "aiJustification"
+    | "aiHumanSummary"
+    | "aiReasoning"
+    | "aiProvider"
+    | "deterministicDecision"
+    | "deterministicReason"
+  >
 >;
 
 /**

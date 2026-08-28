@@ -40,7 +40,10 @@ export const pgPool = new Pool({ connectionString: process.env.DATABASE_URL });
  *   - deterministic decision + reason: deterministicDecision/deterministicReason,
  *     from apps/facilitator/src/policy/deterministic.ts's DeterministicPolicyResult
  *   - AI recommendation + justification + provider: aiRecommendation/
- *     aiJustification/aiProvider, from ../policy/ai-advisory.ts's AdvisoryResult
+ *     aiJustification/aiProvider, from ../policy/ai-advisory.ts's AdvisoryResult.
+ *     aiJustification is sourced from AdvisoryResult.humanSummary (the
+ *     plain-language field for a human reviewer) -- AdvisoryResult no longer
+ *     has a `justification` field.
  *   - all state transition timestamps: createdAt/pendingAt/resolvedAt/
  *     settledAt/failedAt, mirroring the state machine's
  *     created -> pending -> approved|declined|expired -> settled|failed

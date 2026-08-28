@@ -36,6 +36,9 @@ async function main(): Promise<void> {
   client.setSpendControls({ allowedAssets: true });
   registerUpiScheme(client, {
     payerVpa: process.env.DEMO_PAYER_VPA,
+    agentMetadata: {
+      taskContext: process.env.DEMO_TASK_CONTEXT ?? "Fetching premium data on behalf of the user",
+    },
   });
 
   const fetchWithPayment = wrapFetchWithPayment(fetch, client);

@@ -60,9 +60,30 @@ export interface FiatEvent {
    * Not part of CLAUDE.md's original pub/sub event schema -- added so the
    * dashboard's DecisionPanel can render real deterministic/AI data instead
    * of always showing "not available on the live event stream".
+   *
+   * `aiRecommendation` intentionally keeps the "approve"/"hold" vocabulary
+   * ("flag" removed -- apps/facilitator/src/policy/ai-advisory.ts's
+   * AdvisoryRecommendation never produces it, it was already dead here) even
+   * though ai-advisory.ts's own type is now "hold"|"proceed": server.ts
+   * translates "proceed" -> "approve" when publishing. That translation is a
+   * deliberate, permanent compatibility shim, not a stopgap -- the dashboard
+   * (DecisionPanel.tsx, app/page.tsx) already keys its UI off "approve", and
+   * widening this field to accept "proceed" directly would silently change
+   * that UI's behavior without touching it. Retiring "approve" in favor of
+   * "proceed" end-to-end is dashboard-UI work for a separate session.
+   *
+   * `aiJustification` is kept (not renamed) because those same dashboard
+   * call sites read it; `aiHumanSummary` carries the same content under the
+   * new, forward-facing name for code migrating off `aiJustification`.
+   * `aiReasoning` is a separate field, not folded into either of the above:
+   * it's the short technical string meant for logs, distinct audience from
+   * the human-facing `aiHumanSummary`/`aiJustification`.
    */
-  aiRecommendation?: "approve" | "hold" | "flag";
+  aiRecommendation?: "approve" | "hold";
+  aiSemanticMatch?: boolean;
   aiJustification?: string;
+  aiHumanSummary?: string;
+  aiReasoning?: string;
   aiProvider?: string;
   deterministicDecision?: "allowed" | "rejected";
   deterministicReason?: string;
