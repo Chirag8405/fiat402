@@ -44,6 +44,7 @@ import {
   paymentIdIndexKey,
 } from "../../../../packages/scheme-upi/src/state-machine";
 import type { FiatEvent } from "../ws";
+import { satisfyConfirmGate } from "../confirm-gate";
 
 /**
  * Minimal Redis client surface this module needs. Matches ioredis/node-redis
@@ -214,6 +215,15 @@ async function handleCapturedOrPaid(
     razorpayPaymentId: paymentId ?? null,
     reason: null,
   });
+
+  // Paying the Payment Link directly is itself a valid form of "a human
+  // decided" -- satisfy the confirm-gate the same way POST
+  // /internal/confirm-gate/:requestId does (see ../confirm-gate.ts), so an
+  // AI-hold that a human never explicitly confirmed but did pay isn't left
+  // waiting until awaitConfirmGate times out. Unconditional and harmless
+  // for a request that was never a hold: nothing is waiting on a gate that
+  // was never initialized to "0".
+  await satisfyConfirmGate(redis, requestId);
 
   console.log(
     `razorpay webhook: ${eventType} processed, requestId=${requestId} transitioned ${previousState ?? "null"} -> approved`,

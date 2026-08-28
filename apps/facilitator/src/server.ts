@@ -50,6 +50,7 @@ import {
 import { redisClient } from "./store/redis";
 import { pgPool, writeReconciliationRecord, type PgClient, type ReconciliationRecord } from "./store/db";
 import type { EventSubscription } from "./ws";
+import { CONFIRM_GATE_CHANNEL, confirmGateKey, satisfyConfirmGate, type ConfirmGateMessage } from "./confirm-gate";
 
 /** This facilitator supports exactly one scheme/network pair. */
 const SCHEME = "upi";
@@ -58,41 +59,20 @@ const NETWORK = "upi:in";
 /** Same "+60" TTL buffer CLAUDE.md applies to every `req:{requestId}:*` key; see state-machine.ts's createTrackedRequest. */
 const TTL_BUFFER_SECONDS = 60;
 
-/**
- * `confirm-gate:{requestId}` — the demo-hook confirmation flag from
- * CLAUDE.md's Redis key schema section. Owned by this module (not
- * state-machine.ts): it's part of /settle's AI-hold flow, not the core
- * request lifecycle those key builders cover.
- */
-function confirmGateKey(requestId: string): string {
-  return `confirm-gate:${requestId}`;
-}
-
-/**
- * Dedicated pub/sub channel for confirm-gate flips, published by POST
- * /internal/confirm-gate/:requestId (below) and awaited by
- * awaitConfirmGate. Deliberately separate from ./ws.ts's fiat402:events:
- * a gate flip isn't a settlement state transition (FiatEvent's schema), it's
- * a different concern owned entirely by this module.
- */
-const CONFIRM_GATE_CHANNEL = "fiat402:confirm-gate";
-
-interface ConfirmGateMessage {
-  requestId: string;
-}
-
 function isConfirmGateMessageLike(value: unknown): value is ConfirmGateMessage {
   return !!value && typeof value === "object" && typeof (value as ConfirmGateMessage).requestId === "string";
 }
 
 /**
  * Bounded, pub/sub-driven wait for a human to flip confirm-gate:{requestId}
- * to "1" via POST /internal/confirm-gate/:requestId. Structurally mirrors
- * state-machine.ts's awaitResolution (setTimeout + subscribe + a `finish`
- * guard so only the first of the two ever settles the promise), but is not
- * built on top of it: this waits on a gate flip, not a settlement state
- * transition, and CONFIRM_GATE_CHANNEL is a separate channel from
- * fiat402:events for exactly that reason.
+ * to "1" -- either via POST /internal/confirm-gate/:requestId, or by paying
+ * the Payment Link directly (see ./confirm-gate.ts's satisfyConfirmGate,
+ * called from both that route below and razorpay/webhook-handler.ts).
+ * Structurally mirrors state-machine.ts's awaitResolution (setTimeout +
+ * subscribe + a `finish` guard so only the first of the two ever settles the
+ * promise), but is not built on top of it: this waits on a gate flip, not a
+ * settlement state transition, and CONFIRM_GATE_CHANNEL is a separate
+ * channel from fiat402:events for exactly that reason.
  *
  * NEVER rejects. POST /settle's route handler is `void (async () => {...})()`
  * with no top-level catch -- an unhandled rejection here would mean the HTTP
@@ -707,11 +687,11 @@ export function createServer(deps: FacilitatorDeps): Express {
         }
       }
       const requestId = String(req.params.requestId);
-      await deps.redis.set(confirmGateKey(requestId), "1");
-      // Publish so a live awaitConfirmGate call resolves immediately
-      // instead of riding out the full timeout -- see that function's doc
-      // comment in this file.
-      await deps.redis.publish(CONFIRM_GATE_CHANNEL, JSON.stringify({ requestId }));
+      // See ./confirm-gate.ts's satisfyConfirmGate: also called from
+      // razorpay/webhook-handler.ts when a Payment Link is paid directly,
+      // so both ways a human can decide to let a held request proceed stay
+      // in lockstep on the same set+publish logic.
+      await satisfyConfirmGate(deps.redis, requestId);
       res.status(200).send("ok");
     })();
   });

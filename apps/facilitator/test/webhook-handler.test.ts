@@ -161,8 +161,9 @@ describe("razorpayWebhookHandler — state transitions", () => {
 
     expect(res.statusCode).toBe(200);
     expect(redis.store.get(`req:${REQUEST_ID}:state`)).toBe("approved");
-    expect(redis.published).toHaveLength(1);
-    const published = JSON.parse(redis.published[0].message);
+    const eventMessages = redis.published.filter(p => p.channel === "fiat402:events");
+    expect(eventMessages).toHaveLength(1);
+    const published = JSON.parse(eventMessages[0]!.message);
     expect(published).toMatchObject({
       requestId: REQUEST_ID,
       state: "approved",
@@ -177,6 +178,31 @@ describe("razorpayWebhookHandler — state transitions", () => {
     const recentList = redis.lists.get("fiat402:events:recent") ?? [];
     expect(recentList).toHaveLength(1);
     expect(JSON.parse(recentList[0]!)).toMatchObject({ requestId: REQUEST_ID, state: "approved" });
+
+    // Regression: paying the Payment Link directly must satisfy the
+    // confirm-gate the same way POST /internal/confirm-gate/:requestId
+    // does -- otherwise an AI-hold a human never explicitly confirmed but
+    // did pay is stuck waiting until awaitConfirmGate times out.
+    expect(redis.store.get(`confirm-gate:${REQUEST_ID}`)).toBe("1");
+    const gateMessages = redis.published.filter(p => p.channel === "fiat402:confirm-gate");
+    expect(gateMessages).toHaveLength(1);
+    expect(JSON.parse(gateMessages[0]!.message)).toEqual({ requestId: REQUEST_ID });
+  });
+
+  it("is idempotent when a human already confirmed the gate before paying", async () => {
+    await redis.set(`paymentLinkId:${PAYMENT_LINK_ID}:requestId`, REQUEST_ID);
+    await redis.set(`req:${REQUEST_ID}:state`, "pending");
+    await redis.set(`confirm-gate:${REQUEST_ID}`, "1");
+
+    const body = paymentCapturedBody();
+    const signature = sign(body, SECRET);
+    const handler = razorpayWebhookHandler(redis, SECRET);
+    const { req, res } = buildReqRes(body, signature);
+    handler(req, res, () => {});
+    await waitForHandler();
+
+    expect(res.statusCode).toBe(200);
+    expect(redis.store.get(`confirm-gate:${REQUEST_ID}`)).toBe("1");
   });
 
   it("transitions to declined on payment.failed", async () => {
@@ -199,8 +225,14 @@ describe("razorpayWebhookHandler — state transitions", () => {
     await waitForHandler();
 
     expect(redis.store.get(`req:${REQUEST_ID}:state`)).toBe("declined");
-    const published = JSON.parse(redis.published[0].message);
+    const eventMessages = redis.published.filter(p => p.channel === "fiat402:events");
+    const published = JSON.parse(eventMessages[0]!.message);
     expect(published.meta.reason).toBe("Payment declined by bank");
+
+    // A decline is not "a human decided to approve" -- the confirm-gate
+    // must not be touched.
+    expect(redis.store.get(`confirm-gate:${REQUEST_ID}`)).toBeUndefined();
+    expect(redis.published.some(p => p.channel === "fiat402:confirm-gate")).toBe(false);
   });
 
   it("publishes a fresh event when payment.captured arrives after a prior decline (UPI retry)", async () => {
@@ -218,14 +250,19 @@ describe("razorpayWebhookHandler — state transitions", () => {
 
     expect(res.statusCode).toBe(200);
     expect(redis.store.get(`req:${REQUEST_ID}:state`)).toBe("approved");
-    expect(redis.published).toHaveLength(1);
-    const published = JSON.parse(redis.published[0].message);
+    const eventMessages = redis.published.filter(p => p.channel === "fiat402:events");
+    expect(eventMessages).toHaveLength(1);
+    const published = JSON.parse(eventMessages[0]!.message);
     expect(published).toMatchObject({
       requestId: REQUEST_ID,
       state: "approved",
       previousState: "declined",
     });
     expect(consoleSpy.mock.calls.some(call => String(call[0]).includes("UPI retry detected"))).toBe(true);
+
+    // The retry-driven approval must also satisfy the confirm-gate, same as
+    // a fresh approval -- see the earlier "transitions to approved" test.
+    expect(redis.store.get(`confirm-gate:${REQUEST_ID}`)).toBe("1");
 
     consoleSpy.mockRestore();
   });
