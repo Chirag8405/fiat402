@@ -1,7 +1,8 @@
 /**
  * The fiat402 facilitator's Express HTTP interface: POST /verify, POST
- * /settle, GET /supported, POST /webhooks/razorpay, and the demo-hook
- * POST /internal/confirm-gate/:requestId.
+ * /settle, GET /supported, GET /reconciliation/:requestId, POST
+ * /webhooks/razorpay, and the demo-hook POST
+ * /internal/confirm-gate/:requestId.
  *
  * This module only wires together pieces that already exist:
  *   - ./policy/deterministic.ts        (Module 2 — final-authority policy gate)
@@ -48,7 +49,7 @@ import {
   type StateMachineRedisClient,
 } from "../../../packages/scheme-upi/src/state-machine";
 import { redisClient } from "./store/redis";
-import { pgPool, writeReconciliationRecord, type PgClient, type ReconciliationRecord } from "./store/db";
+import { pgPool, writeReconciliationRecord, readReconciliationRecord, type PgClient, type ReconciliationRecord } from "./store/db";
 import type { EventSubscription } from "./ws";
 import { CONFIRM_GATE_CHANNEL, confirmGateKey, satisfyConfirmGate, type ConfirmGateMessage } from "./confirm-gate";
 
@@ -739,6 +740,29 @@ export function createServer(deps: FacilitatorDeps): Express {
       extensions: [],
       signers: {},
     });
+  });
+
+  // --- GET /reconciliation/:requestId ------------------------------------
+  //
+  // Read-only lookup of the durable audit trail written by
+  // writeReconciliationRecord once a request reaches a terminal outcome
+  // (settled|failed). Exists because the dashboard's live event stream
+  // (fiat402:events / fiat402:events:recent) is a rolling, bounded buffer:
+  // once the "pending" event carrying aiRecommendation/aiSemanticMatch/etc.
+  // scrolls out of that window, the dashboard has no other way to recover
+  // it -- see apps/dashboard/app/api/reconciliation/[requestId]/route.ts,
+  // which proxies to this route. Unauthenticated, matching /supported: this
+  // exposes the same fields /verify's response body and the public
+  // fiat402:events stream already expose today, not a new class of data.
+  app.get("/reconciliation/:requestId", (req: Request, res: Response): void => {
+    void (async () => {
+      const record = await readReconciliationRecord(deps.pg, String(req.params.requestId));
+      if (!record) {
+        res.status(404).json({ error: "no reconciliation record for this requestId" });
+        return;
+      }
+      res.status(200).json(record);
+    })();
   });
 
   // --- POST /internal/confirm-gate/:requestId ----------------------------

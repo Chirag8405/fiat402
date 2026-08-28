@@ -55,3 +55,40 @@ export const EVENTS_CHANNEL = "fiat402:events";
  * history for a reader that wasn't subscribed at publish time.
  */
 export const EVENTS_RECENT_LIST = "fiat402:events:recent";
+
+/**
+ * Mirrors apps/facilitator/src/store/db.ts's `ReconciliationRecord` --
+ * duplicated here for the same reason as `FiatEvent` above (zero
+ * cross-package imports into apps/facilitator/). Fetched via
+ * app/api/reconciliation/[requestId]/route.ts, which proxies to the
+ * facilitator's `GET /reconciliation/:requestId`, once a request has
+ * reached a terminal state and the live event stream no longer has its
+ * decision-layer data (see app/page.tsx's postgres-fallback effect).
+ *
+ * `aiRecommendation` here uses the facilitator's actual "hold"|"proceed"
+ * vocabulary (unlike `FiatEvent.aiRecommendation` above, which keeps the
+ * "approve"|"hold" wire shim for the live-event path) -- writeReconciliationRecord
+ * persists `AdvisoryResult.recommendation` directly, with no translation.
+ * Code consuming both sources into one shape must translate "proceed" ->
+ * "approve" itself; see app/page.tsx's postgres-fallback effect for where
+ * that happens.
+ */
+export interface ReconciliationRecordDto {
+  requestId: string;
+  txnRef: string | null;
+  razorpayPaymentId: string | null;
+  paymentLinkId: string | null;
+  amountPaise: string;
+  payTo: string;
+  deterministicDecision: boolean;
+  deterministicReason: string | null;
+  aiRecommendation: "hold" | "proceed" | null;
+  aiJustification: string | null;
+  aiProvider: string | null;
+  createdAt: string;
+  pendingAt: string | null;
+  resolvedAt: string | null;
+  settledAt: string | null;
+  failedAt: string | null;
+  finalOutcome: "settled" | "failed";
+}

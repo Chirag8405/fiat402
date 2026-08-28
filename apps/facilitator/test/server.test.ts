@@ -134,10 +134,12 @@ class FakeRedis implements FacilitatorRedisClient {
 
 class FakePg implements PgClient {
   calls: Array<{ text: string; params?: unknown[] }> = [];
+  /** Rows returned by the next (and every subsequent) query -- set by tests exercising readReconciliationRecord's SELECT. Ignored by writeReconciliationRecord, which never reads a query's return value. */
+  rowsToReturn: unknown[] = [];
 
   async query(text: string, params?: unknown[]): Promise<unknown> {
     this.calls.push({ text, params });
-    return undefined;
+    return { rows: this.rowsToReturn };
   }
 }
 
@@ -508,5 +510,58 @@ describe("POST /settle — concurrent requests for the same logical request", ()
     expect(createUpiPaymentLinkMock).toHaveBeenCalledTimes(1);
     expect(result1.body).toMatchObject({ success: true, transaction: "pay_concurrent123" });
     expect(result2.body).toMatchObject({ success: true, transaction: "pay_concurrent123" });
+  });
+});
+
+describe("GET /reconciliation/:requestId", () => {
+  it("returns 404 when no reconciliation record exists for the requestId", async () => {
+    await startServer();
+
+    const res = await fetch(`${baseUrl}/reconciliation/req_unknown`);
+
+    expect(res.status).toBe(404);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(typeof body.error).toBe("string");
+  });
+
+  it("returns the reconciliation record as JSON when one exists", async () => {
+    await startServer();
+
+    pg.rowsToReturn = [
+      {
+        request_id: "req_abc123",
+        txn_ref: "txn_1",
+        razorpay_payment_id: "pay_xyz",
+        payment_link_id: "plink_xyz",
+        amount_paise: "10000",
+        pay_to: MERCHANT,
+        deterministic_decision: true,
+        deterministic_reason: null,
+        ai_recommendation: "proceed",
+        ai_justification: "Looks routine.",
+        ai_provider: "gemini",
+        created_at: new Date("2026-01-01T00:00:00.000Z"),
+        pending_at: new Date("2026-01-01T00:00:01.000Z"),
+        resolved_at: new Date("2026-01-01T00:00:05.000Z"),
+        settled_at: new Date("2026-01-01T00:00:06.000Z"),
+        failed_at: null,
+        final_outcome: "settled",
+      },
+    ];
+
+    const res = await fetch(`${baseUrl}/reconciliation/req_abc123`);
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body).toMatchObject({
+      requestId: "req_abc123",
+      txnRef: "txn_1",
+      razorpayPaymentId: "pay_xyz",
+      paymentLinkId: "plink_xyz",
+      amountPaise: "10000",
+      payTo: MERCHANT,
+      aiRecommendation: "proceed",
+      finalOutcome: "settled",
+    });
   });
 });

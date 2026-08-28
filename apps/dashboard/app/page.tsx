@@ -34,8 +34,9 @@ import { RawTrafficViewer } from "../components/RawTrafficViewer";
 import { UpiCollectCard } from "../components/UpiCollectCard";
 import { StateMachineViz } from "../components/StateMachineViz";
 import { DecisionPanel, type DeterministicDecision, type AiAdvisory } from "../components/DecisionPanel";
-import { ReconciliationRecord, type ObservedTimestamps } from "../components/ReconciliationRecord";
+import { ReconciliationRecord, type ObservedTimestamps, type ReconciliationExtras } from "../components/ReconciliationRecord";
 import { isFiatEventShape, isKnownState, type FiatEvent } from "../lib/events";
+import type { ReconciliationRecordDto } from "../lib/types";
 
 const POLL_INTERVAL_MS = 2500;
 
@@ -114,10 +115,45 @@ function deriveDecision(events: FiatEvent[]): Decision {
   return { deterministic, ai };
 }
 
+/**
+ * Translates a Postgres-sourced AdvisoryRecommendation ("hold"|"proceed")
+ * into the live event stream's "approve"|"hold" wire vocabulary, so
+ * DecisionPanel/ReconciliationRecord render identically regardless of which
+ * source the data came from. Mirrors apps/facilitator/src/ws.ts's own
+ * "proceed" -> "approve" shim for the same reason documented there: this
+ * dashboard's UI already keys its styling off "approve".
+ */
+function toLiveRecommendationVocabulary(recommendation: "hold" | "proceed"): "approve" | "hold" {
+  return recommendation === "proceed" ? "approve" : "hold";
+}
+
+function decisionFromReconciliationRecord(record: ReconciliationRecordDto): Decision {
+  return {
+    deterministic: { allowed: record.deterministicDecision, reason: record.deterministicReason ?? undefined },
+    ai: record.aiRecommendation
+      ? {
+          recommendation: toLiveRecommendationVocabulary(record.aiRecommendation),
+          justification: record.aiJustification ?? "",
+          provider: record.aiProvider ?? "",
+        }
+      : null,
+  };
+}
+
+function emptyReconciliationExtras(): ReconciliationExtras {
+  return { txnRef: null, amountPaise: null, payTo: null };
+}
+
+interface PostgresFallback {
+  decision: Decision;
+  extras: ReconciliationExtras;
+}
+
 export default function DashboardPage() {
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
   const [lastPolledAt, setLastPolledAt] = useState<string | null>(null);
   const [trail, setTrail] = useState<RequestTrail | null>(null);
+  const [postgresFallback, setPostgresFallback] = useState<PostgresFallback | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -183,7 +219,73 @@ export default function DashboardPage() {
   const paymentLinkId = [...events].reverse().find(event => event.meta.paymentLinkId)?.meta.paymentLinkId ?? null;
   const razorpayPaymentId = [...events].reverse().find(event => event.meta.razorpayPaymentId)?.meta.razorpayPaymentId ?? null;
   const finalOutcome = current?.state === "settled" || current?.state === "failed" ? current.state : null;
-  const { deterministic, ai } = deriveDecision(events);
+  const liveDecision = deriveDecision(events);
+  const hasLiveDecision = liveDecision.deterministic !== null || liveDecision.ai !== null;
+
+  // Falls back to Postgres (via the facilitator's GET /reconciliation/:requestId,
+  // proxied at /api/reconciliation/:requestId) once a request has reached a
+  // terminal outcome AND the live event stream has no decision-layer data for
+  // it -- prefer live data whenever any of it exists. This closes the gap
+  // where the "pending" event carrying aiRecommendation/aiSemanticMatch/etc.
+  // has scrolled out of fiat402:events:recent's bounded 200-entry window (or
+  // the tab was reopened after it already had), even though a full
+  // reconciliation record was durably written to Postgres once the request
+  // settled/failed -- see ReconciliationRecord.tsx's top-of-file comment.
+  useEffect(() => {
+    if (!requestId || !finalOutcome || hasLiveDecision) {
+      setPostgresFallback(null);
+      return;
+    }
+    // Rebound to a new const: TS doesn't carry the `requestId` narrowing
+    // above into the nested async function below across the closure
+    // boundary, even though it's a `const` that can't have changed.
+    const currentRequestId = requestId;
+
+    let cancelled = false;
+
+    async function fetchWithRetry(): Promise<void> {
+      // Up to 3 attempts, 1s apart: a 404 here can be a real, small race,
+      // not "never will exist" -- settlePayment publishes the terminal
+      // FiatEvent to Redis (which is what set finalOutcome above) BEFORE
+      // its writeReconciliationRecord call is awaited, so this dashboard
+      // can see "settled"/"failed" a few ms before the Postgres row
+      // actually exists.
+      const MAX_ATTEMPTS = 3;
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        try {
+          const res = await fetch(`/api/reconciliation/${encodeURIComponent(currentRequestId)}`);
+          if (res.ok) {
+            const record = (await res.json()) as ReconciliationRecordDto;
+            if (!cancelled) {
+              setPostgresFallback({
+                decision: decisionFromReconciliationRecord(record),
+                extras: { txnRef: record.txnRef, amountPaise: record.amountPaise, payTo: record.payTo },
+              });
+            }
+            return;
+          }
+          if (res.status !== 404) {
+            console.warn(`page: /api/reconciliation/${currentRequestId} failed with status ${res.status}`);
+            return;
+          }
+        } catch (err) {
+          console.warn(`page: /api/reconciliation/${currentRequestId} request failed`, err);
+          return;
+        }
+        if (attempt < MAX_ATTEMPTS && !cancelled) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+      }
+    }
+
+    void fetchWithRetry();
+    return () => {
+      cancelled = true;
+    };
+  }, [requestId, finalOutcome, hasLiveDecision]);
+
+  const { deterministic, ai } = hasLiveDecision ? liveDecision : (postgresFallback?.decision ?? liveDecision);
+  const reconciliationExtras = postgresFallback?.extras ?? emptyReconciliationExtras();
 
   return (
     <main className="mx-auto flex min-h-screen max-w-6xl flex-col gap-6 p-6">
@@ -207,6 +309,7 @@ export default function DashboardPage() {
           timestamps={deriveTimestamps(events)}
           deterministic={deterministic}
           ai={ai}
+          extras={reconciliationExtras}
         />
       </div>
 

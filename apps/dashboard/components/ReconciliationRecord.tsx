@@ -17,9 +17,15 @@
  * and -- for any request that reached "pending" -- deterministicDecision/
  * deterministicReason and aiRecommendation (see apps/facilitator/src/ws.ts's
  * FiatEvent, which now carries these on the "pending" transition event).
- * Fields this dashboard genuinely cannot see live (txnRef, amountPaise,
- * payTo) are rendered as "not available on the live event stream" rather
- * than guessed at.
+ *
+ * `txnRef`/`amountPaise`/`payTo` were never derivable from the live stream
+ * at all (no FiatEvent field carries them) -- `extras` below is populated
+ * from app/page.tsx's Postgres-fallback fetch (GET
+ * /api/reconciliation/:requestId, once a request is terminal), the same
+ * fetch that backfills `deterministic`/`ai` when the "pending" event has
+ * scrolled out of fiat402:events:recent's bounded window. Still renders as
+ * "not available on the live event stream" until/unless that fetch
+ * resolves -- never guessed at.
  */
 
 import { EmptyState } from "./EmptyState";
@@ -34,6 +40,13 @@ export interface ObservedTimestamps {
   failedAt: string | null;
 }
 
+/** Fields no FiatEvent carries -- only ever available via the Postgres fallback fetch, never the live stream. See this file's top-of-file comment. */
+export interface ReconciliationExtras {
+  txnRef: string | null;
+  amountPaise: string | null;
+  payTo: string | null;
+}
+
 export interface ReconciliationRecordProps {
   requestId: string | null;
   finalOutcome: "settled" | "failed" | null;
@@ -42,6 +55,7 @@ export interface ReconciliationRecordProps {
   timestamps: ObservedTimestamps;
   deterministic: DeterministicDecision | null;
   ai: AiAdvisory | null;
+  extras: ReconciliationExtras;
 }
 
 function Field({ label, value }: { label: string; value: React.ReactNode }) {
@@ -61,6 +75,7 @@ export function ReconciliationRecord({
   timestamps,
   deterministic,
   ai,
+  extras,
 }: ReconciliationRecordProps) {
   return (
     <Card>
@@ -79,6 +94,9 @@ export function ReconciliationRecord({
             <Field label="Payment Link" value={paymentLinkId && <code className="break-all">{paymentLinkId}</code>} />
             <Field label="Deterministic decision" value={deterministic ? (deterministic.allowed ? "allowed" : "rejected") : null} />
             <Field label="AI recommendation" value={ai?.recommendation} />
+            <Field label="Transaction ref" value={extras.txnRef && <code className="break-all">{extras.txnRef}</code>} />
+            <Field label="Amount (paise)" value={extras.amountPaise} />
+            <Field label="Pay to" value={extras.payTo && <code className="break-all">{extras.payTo}</code>} />
             <Field label="Pending at" value={timestamps.pendingAt} />
             <Field label="Resolved at" value={timestamps.resolvedAt} />
             <Field label="Settled at" value={timestamps.settledAt} />
