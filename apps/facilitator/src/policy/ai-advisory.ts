@@ -218,12 +218,25 @@ async function callGemini(prompt: string, fetchImpl: typeof fetch): Promise<Pars
   );
 
   if (!res.ok) {
-    throw new Error(`Gemini request failed with status ${res.status}`);
+    // Read as text, not json() -- a 429/5xx body is frequently plain text
+    // ("Too Many Requests") or an HTML error page, not JSON, and calling
+    // .json() on it throws a raw SyntaxError instead of the clean,
+    // catchable Error this function is supposed to produce on failure.
+    const bodyText = await res.text().catch(() => "<unreadable body>");
+    throw new Error(`Gemini request failed with status ${res.status}: ${bodyText}`);
   }
 
-  const data = (await res.json()) as {
-    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-  };
+  // Even on a 2xx response, the body isn't guaranteed to be valid JSON (a
+  // misconfigured proxy/gateway can return 200 with a non-JSON body) -- so
+  // .json() is wrapped rather than called directly, keeping this a normal
+  // thrown Error that getAdvisoryRecommendation's try/catch already falls
+  // through on, instead of an unhandled SyntaxError.
+  let data: { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
+  try {
+    data = await res.json();
+  } catch (err) {
+    throw new Error(`Gemini response body was not valid JSON: ${err instanceof Error ? err.message : String(err)}`);
+  }
   const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
   if (typeof text !== "string") {
     throw new Error("Gemini response missing text content");
@@ -262,12 +275,20 @@ async function callGroq(prompt: string, fetchImpl: typeof fetch): Promise<Parsed
   );
 
   if (!res.ok) {
-    throw new Error(`Groq request failed with status ${res.status}`);
+    // Same reasoning as callGemini above: read as text, not json() -- a
+    // 429/5xx body is frequently plain text ("Too Many Requests") or an
+    // HTML error page, not JSON.
+    const bodyText = await res.text().catch(() => "<unreadable body>");
+    throw new Error(`Groq request failed with status ${res.status}: ${bodyText}`);
   }
 
-  const data = (await res.json()) as {
-    choices?: Array<{ message?: { content?: string } }>;
-  };
+  // Same reasoning as callGemini above: don't assume a 2xx body is valid JSON.
+  let data: { choices?: Array<{ message?: { content?: string } }> };
+  try {
+    data = await res.json();
+  } catch (err) {
+    throw new Error(`Groq response body was not valid JSON: ${err instanceof Error ? err.message : String(err)}`);
+  }
   const text = data?.choices?.[0]?.message?.content;
   if (typeof text !== "string") {
     throw new Error("Groq response missing message content");

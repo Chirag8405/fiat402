@@ -30,7 +30,20 @@ function jsonResponse(body: unknown, ok = true, status = 200): Response {
     ok,
     status,
     json: async () => body,
+    text: async () => JSON.stringify(body),
   } as Response;
+}
+
+/** A non-JSON response body, e.g. a rate-limiter's plain-text/HTML error page. */
+function plainTextResponse(text: string, ok = false, status = 429): Response {
+  return {
+    ok,
+    status,
+    json: async () => {
+      throw new SyntaxError(`Unexpected token '${text[0]}', "${text}" is not valid JSON`);
+    },
+    text: async () => text,
+  } as unknown as Response;
 }
 
 function geminiBody(text: string) {
@@ -372,5 +385,88 @@ describe("getAdvisoryRecommendation", () => {
     expect(capturedPrompt).toContain("Acme Chai Stall");
     expect(capturedPrompt).toContain("One cup of chai");
     expect(capturedPrompt).toContain("Booking a one-way flight to Goa");
+  });
+
+  it("falls through cleanly (no unhandled exception) when Gemini 429s with a plain-text body", async () => {
+    // Regression test: a real 429 from Gemini/Groq is frequently plain text
+    // ("Too Many Requests"), not JSON. Calling .json() on that throws a raw
+    // SyntaxError -- this must never escape getAdvisoryRecommendation.
+    const requirements = buildRequirements();
+    const payload = buildPayload(requirements);
+    const fetchImpl = vi.fn(async (url: string | URL) => {
+      const urlStr = String(url);
+      if (urlStr.includes("generativelanguage.googleapis.com")) {
+        return plainTextResponse("Too Many Requests", false, 429);
+      }
+      if (urlStr.includes("api.groq.com")) {
+        return jsonResponse(
+          groqBody(
+            advisoryJson({
+              recommendation: "hold",
+              semanticMatch: false,
+              reasoning: "Gemini rate-limited, deferring to Groq.",
+              humanSummary: "Please review — the primary AI provider was unavailable.",
+            }),
+          ),
+        );
+      }
+      throw new Error(`unexpected url: ${urlStr}`);
+    });
+    const context: AdvisoryContext = { fetchImpl: fetchImpl as unknown as typeof fetch };
+
+    const result = await getAdvisoryRecommendation(requirements, payload, context);
+
+    expect(result.recommendation).toBe("hold");
+    expect(result.provider).toBe("groq");
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns fail-closed (not a thrown exception) when both providers 429 with plain-text bodies", async () => {
+    const requirements = buildRequirements();
+    const payload = buildPayload(requirements);
+    const fetchImpl = vi.fn(async () => plainTextResponse("Too Many Requests", false, 429));
+    const context: AdvisoryContext = { fetchImpl: fetchImpl as unknown as typeof fetch };
+
+    const result = await getAdvisoryRecommendation(requirements, payload, context);
+
+    expect(result).toEqual({
+      recommendation: "hold",
+      semanticMatch: false,
+      reasoning: "AI unavailable — fail-closed",
+      humanSummary: "AI verification unavailable — review this payment manually before approving.",
+      provider: "fail-closed",
+    });
+  });
+
+  it("falls through cleanly when a provider returns 200 OK with a non-JSON body", async () => {
+    // Distinct from the 429 case: this covers a misconfigured proxy/gateway
+    // that returns a 2xx status with a non-JSON body, which res.ok alone
+    // would not catch.
+    const requirements = buildRequirements();
+    const payload = buildPayload(requirements);
+    const fetchImpl = vi.fn(async (url: string | URL) => {
+      const urlStr = String(url);
+      if (urlStr.includes("generativelanguage.googleapis.com")) {
+        return plainTextResponse("<html>upstream error</html>", true, 200);
+      }
+      if (urlStr.includes("api.groq.com")) {
+        return jsonResponse(
+          groqBody(
+            advisoryJson({
+              recommendation: "proceed",
+              semanticMatch: true,
+              reasoning: "Fine.",
+              humanSummary: "Fine.",
+            }),
+          ),
+        );
+      }
+      throw new Error(`unexpected url: ${urlStr}`);
+    });
+    const context: AdvisoryContext = { fetchImpl: fetchImpl as unknown as typeof fetch };
+
+    const result = await getAdvisoryRecommendation(requirements, payload, context);
+
+    expect(result.provider).toBe("groq");
   });
 });
