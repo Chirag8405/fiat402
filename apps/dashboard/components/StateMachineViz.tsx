@@ -68,10 +68,24 @@ const STAGES: Stage[] = [
   },
 ];
 
-function boxTone(status: "current" | "visited" | "idle") {
-  if (status === "current") return "border-primary bg-primary/15 text-primary scale-105 shadow-[0_0_0_3px] shadow-primary/20";
+type NodeStatus = "current" | "visited" | "idle";
+
+/**
+ * Node styling only -- no infinite/looping animation here. The `current`
+ * ring-shadow is a static style applied once a node becomes current, not a
+ * pulsing keyframe: per this file's design brief, the rail lights up on real
+ * transitions only, never via decorative looping motion. Transform + color
+ * transition at 180ms with the shared --ease-out curve is the only motion.
+ */
+function nodeTone(status: NodeStatus) {
+  if (status === "current") return "border-primary bg-primary/15 text-primary scale-[1.08] shadow-[0_0_0_3px] shadow-primary/20";
   if (status === "visited") return "border-success/50 bg-success/10 text-success";
   return "border-border bg-muted text-muted-foreground";
+}
+
+/** Whether the connecting track segment leading INTO `stage` should be lit -- true once any state in that stage has actually been reached. */
+function stageReached(stage: Stage, current: RequestState | null, visited: Set<RequestState>): boolean {
+  return stage.states.some(({ state }) => state === current || visited.has(state));
 }
 
 /** Minimum time (ms) each state is shown before the queue advances to the next one. */
@@ -170,54 +184,68 @@ export function StateMachineViz({ events }: StateMachineVizProps) {
   const current = history[history.length - 1] ?? null;
   const visited = new Set(history);
 
-  if (!requestId) {
-    return (
-      <Card>
-        <CardHeader>
-          <CardTitle>State machine</CardTitle>
-          <CardDescription>created &rarr; pending &rarr; approved|declined|expired &rarr; settled|failed</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <EmptyState>No requests yet. The diagram animates as soon as one enters &quot;pending&quot;.</EmptyState>
-        </CardContent>
-      </Card>
-    );
-  }
-
   return (
     <Card>
       <CardHeader>
         <CardTitle>State machine</CardTitle>
-        <CardDescription>Request: {requestId}</CardDescription>
+        <CardDescription>{requestId ? `Request: ${requestId}` : "created → pending → approved|declined|expired → settled|failed"}</CardDescription>
       </CardHeader>
       <CardContent>
-        <div className="flex items-stretch gap-2 overflow-x-auto pb-1">
-          {STAGES.map((stage, stageIndex) => (
-            <div key={stage.label} className="flex items-center gap-2">
-              <div className="flex flex-col gap-1.5">
-                <div className="text-center text-[10px] uppercase tracking-wide text-muted-foreground">{stage.label}</div>
-                <div className="flex flex-col gap-1.5">
-                  {stage.states.map(({ state, label }) => {
-                    const status = state === current ? "current" : visited.has(state) ? "visited" : "idle";
-                    return (
-                      <div
-                        key={state}
-                        className={cn(
-                          "rounded-lg border px-3 py-1.5 text-center text-xs font-medium transition-all duration-300 ease-out",
-                          boxTone(status),
-                        )}
-                      >
-                        {label}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-              {stageIndex < STAGES.length - 1 && <div className="self-center text-muted-foreground">&rarr;</div>}
-            </div>
-          ))}
-        </div>
+        {!requestId && (
+          <div className="mb-3">
+            <EmptyState>No requests yet. The rail lights up as soon as one enters &quot;pending&quot;.</EmptyState>
+          </div>
+        )}
+        <Rail stages={STAGES} current={current} visited={visited} />
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * The rail itself: a row of stage nodes connected by track segments that
+ * fill in as real transitions arrive. Rendered even at idle (all nodes
+ * `idle`, all segments unlit) so the first real event reads as the rail
+ * lighting up rather than a card materializing from nothing.
+ */
+function Rail({ stages, current, visited }: { stages: Stage[]; current: RequestState | null; visited: Set<RequestState> }) {
+  return (
+    <div className="flex items-start gap-0 overflow-x-auto pb-1">
+      {stages.map((stage, stageIndex) => (
+        <div key={stage.label} className="flex items-start">
+          <div className="flex min-w-[92px] flex-col items-center gap-2">
+            <div className="text-center text-[10px] uppercase tracking-wide text-muted-foreground">{stage.label}</div>
+            <div className="flex flex-col items-center gap-1.5">
+              {stage.states.map(({ state, label }) => {
+                const status: NodeStatus = state === current ? "current" : visited.has(state) ? "visited" : "idle";
+                return (
+                  <div
+                    key={state}
+                    className={cn(
+                      "rounded-full border px-3 py-1 text-center text-xs font-medium",
+                      "transition-[transform,background-color,color,border-color,box-shadow] duration-[180ms] ease-[var(--ease-out)]",
+                      nodeTone(status),
+                    )}
+                  >
+                    {label}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+          {stageIndex < stages.length - 1 && (
+            <div className="relative mt-4 h-0.5 w-10 shrink-0 overflow-hidden rounded-full bg-border">
+              <div
+                className={cn(
+                  "absolute inset-0 origin-left rounded-full bg-success",
+                  "transition-transform duration-200 ease-[var(--ease-out)]",
+                  stageReached(stages[stageIndex + 1]!, current, visited) ? "scale-x-100" : "scale-x-0",
+                )}
+              />
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
   );
 }

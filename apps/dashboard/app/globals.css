@@ -15,6 +15,16 @@
   --color-danger: hsl(0 84% 63%);
 }
 
+:root {
+  /* Strong easing curves for deliberate UI motion -- built-in CSS easings
+     (ease, ease-out) are too weak to read as intentional. Referenced via
+     Tailwind arbitrary values, e.g. ease-[var(--ease-out)]. Every new
+     transition in the rail/confirm-gate feature pulls from these two rather
+     than inventing ad hoc bezier values per component. */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+}
+
 body {
   background-color: var(--color-background);
   color: var(--color-foreground);

@@ -109,6 +109,8 @@ function deriveDecision(events: FiatEvent[]): Decision {
           recommendation: decisionEvent.aiRecommendation,
           justification: decisionEvent.aiJustification ?? "",
           provider: decisionEvent.aiProvider ?? "",
+          semanticMatch: decisionEvent.aiSemanticMatch,
+          reasoning: decisionEvent.aiReasoning,
         }
       : null;
 
@@ -300,7 +302,7 @@ export default function DashboardPage() {
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <StateMachineViz events={events} />
         <UpiCollectCard requestId={requestId} state={current?.state ?? null} paymentLinkId={paymentLinkId} />
-        <DecisionPanel requestId={requestId} deterministic={deterministic} ai={ai} />
+        <DecisionPanel requestId={requestId} state={current?.state ?? null} deterministic={deterministic} ai={ai} />
         <ReconciliationRecord
           requestId={requestId}
           finalOutcome={finalOutcome}

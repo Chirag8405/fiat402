@@ -31,6 +31,7 @@
 import { EmptyState } from "./EmptyState";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "./ui/card";
 import { Badge } from "./ui/badge";
+import { cn } from "../lib/utils";
 import type { DeterministicDecision, AiAdvisory } from "./DecisionPanel";
 
 export interface ObservedTimestamps {
@@ -58,11 +59,13 @@ export interface ReconciliationRecordProps {
   extras: ReconciliationExtras;
 }
 
-function Field({ label, value }: { label: string; value: React.ReactNode }) {
+function Field({ label, value, mono }: { label: string; value: React.ReactNode; mono?: boolean }) {
   return (
     <div className="flex flex-col gap-0.5">
       <span className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</span>
-      <span className="text-xs text-foreground">{value ?? <span className="text-muted-foreground">not available on the live event stream</span>}</span>
+      <span className={cn("text-xs text-foreground", mono && "font-mono")}>
+        {value ?? <span className="text-muted-foreground">not available on the live event stream</span>}
+      </span>
     </div>
   );
 }
@@ -88,15 +91,15 @@ export function ReconciliationRecord({
           <EmptyState>Awaiting a terminal (settled|failed) outcome for the current request&hellip;</EmptyState>
         ) : (
           <div className="grid grid-cols-2 gap-x-4 gap-y-3">
-            <Field label="Request ID" value={<code className="break-all">{requestId}</code>} />
+            <Field mono label="Request ID" value={<span className="break-all">{requestId}</span>} />
             <Field label="Final outcome" value={<Badge variant={finalOutcome === "settled" ? "success" : "danger"}>{finalOutcome}</Badge>} />
-            <Field label="Razorpay payment_id" value={razorpayPaymentId && <code className="break-all">{razorpayPaymentId}</code>} />
-            <Field label="Payment Link" value={paymentLinkId && <code className="break-all">{paymentLinkId}</code>} />
+            <Field mono label="Razorpay payment_id" value={razorpayPaymentId && <span className="break-all">{razorpayPaymentId}</span>} />
+            <Field mono label="Payment Link" value={paymentLinkId && <span className="break-all">{paymentLinkId}</span>} />
             <Field label="Deterministic decision" value={deterministic ? (deterministic.allowed ? "allowed" : "rejected") : null} />
             <Field label="AI recommendation" value={ai?.recommendation} />
-            <Field label="Transaction ref" value={extras.txnRef && <code className="break-all">{extras.txnRef}</code>} />
-            <Field label="Amount (paise)" value={extras.amountPaise} />
-            <Field label="Pay to" value={extras.payTo && <code className="break-all">{extras.payTo}</code>} />
+            <Field mono label="Transaction ref" value={extras.txnRef && <span className="break-all">{extras.txnRef}</span>} />
+            <Field mono label="Amount (paise)" value={extras.amountPaise} />
+            <Field mono label="Pay to" value={extras.payTo && <span className="break-all">{extras.payTo}</span>} />
             <Field label="Pending at" value={timestamps.pendingAt} />
             <Field label="Resolved at" value={timestamps.resolvedAt} />
             <Field label="Settled at" value={timestamps.settledAt} />
