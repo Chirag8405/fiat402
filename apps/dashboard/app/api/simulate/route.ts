@@ -50,12 +50,33 @@
  * new requestId, exactly as it does when demo.ts is run from a terminal --
  * AgentConsole hands off to the existing rail/DecisionPanel on that same
  * basis, not by tracking a specific id.
+ *
+ * Raw header capture (PAYMENT-REQUIRED / PAYMENT-SIGNATURE), for
+ * RawTrafficViewer: SCOPED TO THIS ROUTE ONLY. This is the one place in the
+ * whole app that terminates the x402 handshake itself and can see both
+ * headers in-process -- x402-upi-client/test/demo.ts (run from a terminal)
+ * and apps/merchant/lib/x402-middleware.ts in general have no capture path
+ * at all and will keep showing "not observed" in RawTrafficViewer regardless
+ * of this change. PAYMENT-RESPONSE stays out of scope entirely: it only
+ * exists after the deferred, up-to-180s settlement call inside `after()`
+ * below, and capturing it would mean holding the stream open for that same
+ * call this whole design exists to avoid blocking on.
+ *
+ * PAYMENT-REQUIRED is trivial: it's the merchant's own already-sent header,
+ * read directly off the probe response below -- not reconstructed.
+ * PAYMENT-SIGNATURE is harder -- see ../../../lib/simulate-headers.ts's
+ * top-of-file comment for exactly how it's constructed one step ahead of the
+ * real deferred call, and the traced evidence that this is genuinely
+ * deterministic (byte-identical, not just structurally equivalent) to what
+ * that call will actually send.
  */
 
 import { after } from "next/server";
 import { x402Client } from "@x402/core/client";
 import { wrapFetchWithPayment } from "@x402/fetch";
+import type { PaymentRequired } from "@x402/core/types";
 import { registerUpiScheme } from "@fiat402/x402-upi-client";
+import { captureSignatureHeader, type Persona } from "../../../lib/simulate-headers";
 
 export const runtime = "nodejs";
 // Sized for the worst case (a hold that rides out the full 180s
@@ -65,17 +86,25 @@ export const runtime = "nodejs";
 // to actually get this much wall-clock time post-response.
 export const maxDuration = 200;
 
-interface Persona {
-  label: string;
-  taskContext: string;
-}
-
 const PERSONAS: Record<string, Persona> = {
   researchbot: { label: "ResearchBot", taskContext: "Fetch premium market data for client report" },
   travelbot: { label: "TravelBot", taskContext: "Booking a one-way flight to Goa" },
 };
 
 type LineKind = "info" | "success" | "error";
+
+/**
+ * Second NDJSON message shape on the same stream, structurally distinct from
+ * `{ line, kind }` (no `line` field) so AgentConsole.tsx can tell them apart
+ * without a wrapper envelope. Carries the two captured raw headers up to
+ * page.tsx via AgentConsole's `onHeadersCaptured` callback rather than
+ * displaying them as console text.
+ */
+interface HeadersMessage {
+  kind: "headers";
+  paymentRequiredHeader: string;
+  paymentSignatureHeader: string;
+}
 
 function isPersonaKey(value: unknown): value is keyof typeof PERSONAS {
   return typeof value === "string" && value in PERSONAS;
@@ -130,6 +159,11 @@ export async function POST(request: Request): Promise<Response> {
     controllerRef.enqueue(encoder.encode(`${JSON.stringify({ line, kind })}\n`));
   }
 
+  function emitHeaders(paymentRequiredHeader: string, paymentSignatureHeader: string): void {
+    const message: HeadersMessage = { kind: "headers", paymentRequiredHeader, paymentSignatureHeader };
+    controllerRef.enqueue(encoder.encode(`${JSON.stringify(message)}\n`));
+  }
+
   // Drives the stream. Not awaited here -- returning the Response below is
   // what actually starts delivering these chunks to the browser; this IIFE
   // just produces them as the real steps below actually complete.
@@ -145,6 +179,11 @@ export async function POST(request: Request): Promise<Response> {
         return;
       }
       emit("402 Payment Required received from merchant", "success");
+
+      // The merchant's own already-sent header -- read directly, not
+      // reconstructed. See this file's top-of-file comment for why
+      // PAYMENT-SIGNATURE (below) can't be captured this same direct way.
+      const paymentRequiredHeader = probe.headers.get("PAYMENT-REQUIRED");
 
       emit(`constructing UPI payment payload (task: "${persona.taskContext}")...`);
       const client = new x402Client();
@@ -166,6 +205,22 @@ export async function POST(request: Request): Promise<Response> {
         payerVpa: process.env.DEMO_PAYER_VPA,
         agentMetadata: { taskContext: persona.taskContext },
       });
+
+      // Raw header capture, additive only: a failure here (missing header,
+      // decode error, no upi entry) must not abort the actual simulate flow
+      // below, which already worked before this feature existed.
+      if (paymentRequiredHeader) {
+        try {
+          const decoded = JSON.parse(Buffer.from(paymentRequiredHeader, "base64").toString("utf8")) as PaymentRequired;
+          const paymentSignatureHeader = await captureSignatureHeader(decoded, persona);
+          emit("PAYMENT-REQUIRED / PAYMENT-SIGNATURE headers captured", "success");
+          emitHeaders(paymentRequiredHeader, paymentSignatureHeader);
+        } catch (err) {
+          emit(`raw header capture failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`, "error");
+        }
+      } else {
+        emit("PAYMENT-REQUIRED header missing from merchant's 402 response -- raw traffic capture skipped", "error");
+      }
 
       emit("sending payment payload to facilitator via merchant -- watch the rail below");
       controllerRef.close();

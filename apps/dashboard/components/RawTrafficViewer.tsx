@@ -9,12 +9,25 @@
  * resource server (apps/merchant) -- they are never published to the
  * `fiat402:events` Redis channel this dashboard's SSE relay subscribes to
  * (see apps/facilitator/src/ws.ts's FiatEvent: requestId/state/previousState/
- * timestamp/meta only). Per this module's brief ("the event JSON shape ...
- * is authoritative -- build the UI against that exact shape, do not assume
- * additional fields exist"), app/page.tsx has no live source for these
- * headers and passes `null`s here. This component still implements real
- * decode/pretty-print logic against the three props below, so it is correct
- * and ready the moment a capture path for these headers exists.
+ * timestamp/meta only), so there is no general-purpose capture path for them.
+ *
+ * SCOPE LIMIT: `paymentRequiredHeader`/`paymentSignatureHeader` are only ever
+ * populated for a dashboard-triggered Simulate Agent run -- see
+ * app/api/simulate/route.ts's top-of-file comment for exactly how (and why)
+ * that one route can capture/construct them in-process. A request from
+ * x402-upi-client/test/demo.ts (run from a terminal) or from a real agent
+ * hitting the merchant's x402-middleware.ts directly has no capture path at
+ * all and will still show the plain "not observed" empty state below,
+ * exactly as before this feature existed.
+ *
+ * `paymentResponseHeader` stays out of scope entirely and is always `null`:
+ * it only exists after the deferred, up-to-180s settlement call that
+ * app/api/simulate/route.ts hands to `after()` -- capturing it would mean
+ * holding that route's response stream open for the same call this whole
+ * design exists to avoid blocking on. When the other two headers ARE present
+ * (a simulate run happened) but this one is still null, the block below
+ * renders a distinct "pending" message rather than the generic empty state,
+ * so it doesn't read as blank/broken.
  */
 
 import { EmptyState } from "./EmptyState";
@@ -102,6 +115,11 @@ function AcceptsSchemes({ header }: { header: string | null }) {
 
 export function RawTrafficViewer({ requestId, paymentRequiredHeader, paymentSignatureHeader, paymentResponseHeader }: RawTrafficViewerProps) {
   const hasAnything = paymentRequiredHeader || paymentSignatureHeader || paymentResponseHeader;
+  // The other two headers only ever come from a simulate run that captured
+  // them (see this file's top comment) -- their presence, not `requestId` or
+  // anything else, is what distinguishes "a settlement is genuinely pending"
+  // from "nothing was ever captured for this request at all."
+  const awaitingSettlement = !paymentResponseHeader && Boolean(paymentRequiredHeader || paymentSignatureHeader);
 
   return (
     <Card>
@@ -120,7 +138,14 @@ export function RawTrafficViewer({ requestId, paymentRequiredHeader, paymentSign
             <AcceptsSchemes header={paymentRequiredHeader} />
             <HeaderBlock label="PAYMENT-REQUIRED" header={paymentRequiredHeader} />
             <HeaderBlock label="PAYMENT-SIGNATURE" header={paymentSignatureHeader} />
-            <HeaderBlock label="PAYMENT-RESPONSE" header={paymentResponseHeader} />
+            {awaitingSettlement ? (
+              <div>
+                <div className="mb-1 text-xs font-medium text-muted-foreground">PAYMENT-RESPONSE</div>
+                <EmptyState>pending -- awaiting settlement (runs in the background, up to 180s; not captured here)</EmptyState>
+              </div>
+            ) : (
+              <HeaderBlock label="PAYMENT-RESPONSE" header={paymentResponseHeader} />
+            )}
           </>
         )}
       </CardContent>

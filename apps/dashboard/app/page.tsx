@@ -42,7 +42,7 @@
 
 import { useEffect, useState } from "react";
 import { ConnectionIndicator, type ConnectionStatus } from "../components/ConnectionIndicator";
-import { AgentConsole } from "../components/AgentConsole";
+import { AgentConsole, type CapturedHeaders } from "../components/AgentConsole";
 import { RawTrafficViewer } from "../components/RawTrafficViewer";
 import { UpiCollectCard } from "../components/UpiCollectCard";
 import { StateMachineViz } from "../components/StateMachineViz";
@@ -177,6 +177,12 @@ export default function DashboardPage() {
   const [trail, setTrail] = useState<RequestTrail | null>(null);
   const [postgresFallback, setPostgresFallback] = useState<PostgresFallback | null>(null);
   const [displayMode, setDisplayMode] = useState<DisplayMode>("live");
+  // Scoped to the current AgentConsole simulate run, not to `trail` -- reset
+  // via AgentConsole's onRunStart at the exact same moment its own `lines`
+  // reset, per that component's own doc comment. Deliberately NOT cleared by
+  // unrelated trail changes (a real external payment arriving while these
+  // are still showing), matching AgentConsole's own accepted lifecycle.
+  const [simulateHeaders, setSimulateHeaders] = useState<CapturedHeaders | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -345,6 +351,7 @@ export default function DashboardPage() {
   const displayExtras = showLive ? reconciliationExtras : emptyReconciliationExtras();
   const displayFailureReason = showLive ? failureReason : null;
   const displayTimestamps = showLive ? deriveTimestamps(events) : emptyTimestamps();
+  const displaySimulateHeaders = showLive ? simulateHeaders : null;
 
   // Reset/Show-last are gated on `trail` (the real data), not `displayMode`
   // -- "is there anything to act on" is a question about the underlying
@@ -382,7 +389,7 @@ export default function DashboardPage() {
         </div>
       </header>
 
-      <AgentConsole />
+      <AgentConsole onRunStart={() => setSimulateHeaders(null)} onHeadersCaptured={setSimulateHeaders} />
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <StateMachineViz events={events} forceIdle={!showLive} />
@@ -401,7 +408,12 @@ export default function DashboardPage() {
         />
       </div>
 
-      <RawTrafficViewer requestId={displayRequestId} paymentRequiredHeader={null} paymentSignatureHeader={null} paymentResponseHeader={null} />
+      <RawTrafficViewer
+        requestId={displayRequestId}
+        paymentRequiredHeader={displaySimulateHeaders?.paymentRequiredHeader ?? null}
+        paymentSignatureHeader={displaySimulateHeaders?.paymentSignatureHeader ?? null}
+        paymentResponseHeader={null}
+      />
     </main>
   );
 }

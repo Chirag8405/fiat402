@@ -14,6 +14,16 @@
  * verify/advisory/settle via the normal poll loop against /api/events, and
  * duplicating that state here would mean two sources of truth for the same
  * request.
+ *
+ * The stream also carries one structurally distinct message (`{kind:
+ * "headers", ...}`, no `line` field) right before the handoff line, carrying
+ * the real captured PAYMENT-REQUIRED/PAYMENT-SIGNATURE headers for this run
+ * -- see app/api/simulate/route.ts's top-of-file comment for exactly how
+ * those are captured/constructed and why that's scoped to simulate-triggered
+ * runs only. Lifted out to the parent via `onHeadersCaptured` rather than
+ * displayed as console text; `onRunStart` fires at the same moment this
+ * component resets its own `lines`, so the parent can reset its held headers
+ * on the same lifecycle instead of a separate/drifting one.
  */
 
 import { useRef, useState } from "react";
@@ -25,6 +35,15 @@ type LineKind = "info" | "success" | "error";
 interface ConsoleLine {
   line: string;
   kind: LineKind;
+}
+
+export interface CapturedHeaders {
+  paymentRequiredHeader: string;
+  paymentSignatureHeader: string;
+}
+
+interface HeadersMessage extends CapturedHeaders {
+  kind: "headers";
 }
 
 type RunStatus = "idle" | "running" | "done" | "error";
@@ -43,13 +62,30 @@ function isConsoleLine(value: unknown): value is ConsoleLine {
   );
 }
 
+function isHeadersMessage(value: unknown): value is HeadersMessage {
+  return (
+    !!value &&
+    typeof value === "object" &&
+    (value as HeadersMessage).kind === "headers" &&
+    typeof (value as HeadersMessage).paymentRequiredHeader === "string" &&
+    typeof (value as HeadersMessage).paymentSignatureHeader === "string"
+  );
+}
+
 function lineTone(kind: LineKind): string {
   if (kind === "error") return "text-danger";
   if (kind === "success") return "text-success";
   return "text-muted-foreground";
 }
 
-export function AgentConsole() {
+export interface AgentConsoleProps {
+  /** Fires at the same moment this component resets its own `lines` -- see this file's top comment. */
+  onRunStart?: () => void;
+  /** Fires when the stream's `{kind: "headers", ...}` message is parsed. */
+  onHeadersCaptured?: (headers: CapturedHeaders) => void;
+}
+
+export function AgentConsole({ onRunStart, onHeadersCaptured }: AgentConsoleProps) {
   const [activePersona, setActivePersona] = useState<string | null>(null);
   const [lines, setLines] = useState<ConsoleLine[]>([]);
   const [status, setStatus] = useState<RunStatus>("idle");
@@ -60,6 +96,7 @@ export function AgentConsole() {
 
   async function run(personaKey: string): Promise<void> {
     const runId = ++runIdRef.current;
+    onRunStart?.();
     setActivePersona(personaKey);
     setLines([]);
     setStatus("running");
@@ -98,6 +135,10 @@ export function AgentConsole() {
           try {
             parsed = JSON.parse(part);
           } catch {
+            continue;
+          }
+          if (isHeadersMessage(parsed)) {
+            onHeadersCaptured?.({ paymentRequiredHeader: parsed.paymentRequiredHeader, paymentSignatureHeader: parsed.paymentSignatureHeader });
             continue;
           }
           if (!isConsoleLine(parsed)) continue;
