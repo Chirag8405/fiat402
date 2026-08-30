@@ -153,11 +153,23 @@ interface PostgresFallback {
   razorpayPaymentId: string | null;
 }
 
+/**
+ * "live" shows whatever `trail` currently holds (the normal, default mode);
+ * "reset" is a purely local display-suppression mode -- the Reset button
+ * flips into it, "Show last" flips back out. Neither state ever touches
+ * `trail`/`postgresFallback` (the actual accumulated data) or any network
+ * call: this only gates what gets passed to the panels at render time, at
+ * the very bottom of this component, so "Show last" has nothing to
+ * re-fetch -- the data it restores was never discarded, only hidden.
+ */
+type DisplayMode = "live" | "reset";
+
 export default function DashboardPage() {
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
   const [lastPolledAt, setLastPolledAt] = useState<string | null>(null);
   const [trail, setTrail] = useState<RequestTrail | null>(null);
   const [postgresFallback, setPostgresFallback] = useState<PostgresFallback | null>(null);
+  const [displayMode, setDisplayMode] = useState<DisplayMode>("live");
 
   useEffect(() => {
     let cancelled = false;
@@ -216,6 +228,17 @@ export default function DashboardPage() {
       clearInterval(interval);
     };
   }, []);
+
+  // A genuinely new event (new request, or -- structurally impossible today,
+  // but harmless either way -- more events on the same one) always takes
+  // over the display, overriding whatever Reset/Show-last state the user is
+  // in: `trail`'s reference only changes inside applyEvent's setTrail calls
+  // above, so this effect simply doesn't refire between polls that carry
+  // nothing new, which is what lets a manual Reset/Show-last click stick
+  // undisturbed until real new data actually arrives.
+  useEffect(() => {
+    setDisplayMode("live");
+  }, [trail]);
 
   const events = trail?.events ?? [];
   const requestId = trail?.requestId ?? null;
@@ -316,6 +339,30 @@ export default function DashboardPage() {
   const reconciliationExtras = postgresFallback?.extras ?? emptyReconciliationExtras();
   const razorpayPaymentId = liveRazorpayPaymentId ?? postgresFallback?.razorpayPaymentId ?? null;
 
+  // Render-boundary suppression only -- everything above (trail,
+  // postgresFallback, and everything derived from them) is untouched by
+  // displayMode. "reset" just means these panels get idle/empty props for
+  // this render; StateMachineViz gets the real `events` regardless (plus
+  // forceIdle) so its own internal queue keeps accumulating underneath, per
+  // that component's own doc comment on why.
+  const showLive = displayMode === "live";
+  const displayRequestId = showLive ? requestId : null;
+  const displayState = showLive ? (current?.state ?? null) : null;
+  const displayFinalOutcome = showLive ? finalOutcome : null;
+  const displayDeterministic = showLive ? deterministic : null;
+  const displayAi = showLive ? ai : null;
+  const displayPaymentLinkId = showLive ? paymentLinkId : null;
+  const displayRazorpayPaymentId = showLive ? razorpayPaymentId : null;
+  const displayExtras = showLive ? reconciliationExtras : emptyReconciliationExtras();
+  const displayFailureReason = showLive ? failureReason : null;
+  const displayTimestamps = showLive ? deriveTimestamps(events) : emptyTimestamps();
+
+  // Reset/Show-last are gated on `trail` (the real data), not `displayMode`
+  // -- "is there anything to act on" is a question about the underlying
+  // data, independent of what's currently being shown.
+  const canReset = trail !== null && displayMode === "live";
+  const canShowLast = trail !== null && displayMode === "reset";
+
   return (
     <main className="mx-auto flex min-h-screen max-w-6xl flex-col gap-6 p-6">
       <header className="flex items-center justify-between">
@@ -323,29 +370,49 @@ export default function DashboardPage() {
           <h1 className="text-lg font-semibold">fiat402 control tower</h1>
           <p className="text-xs text-muted-foreground">Polling view over the fiat402:events Redis channel</p>
         </div>
-        <ConnectionIndicator status={status} lastPolledAt={lastPolledAt} />
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => setDisplayMode("reset")}
+              disabled={!canReset}
+              className="rounded-full border border-border px-3 py-1 text-xs font-medium text-muted-foreground transition-[opacity,background-color] duration-150 ease-[var(--ease-out)] hover:bg-muted disabled:opacity-40"
+            >
+              Reset
+            </button>
+            <button
+              type="button"
+              onClick={() => setDisplayMode("live")}
+              disabled={!canShowLast}
+              className="rounded-full border border-border px-3 py-1 text-xs font-medium text-muted-foreground transition-[opacity,background-color] duration-150 ease-[var(--ease-out)] hover:bg-muted disabled:opacity-40"
+            >
+              Show last
+            </button>
+          </div>
+          <ConnectionIndicator status={status} lastPolledAt={lastPolledAt} />
+        </div>
       </header>
 
       <AgentConsole />
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <StateMachineViz events={events} />
-        <UpiCollectCard requestId={requestId} state={current?.state ?? null} paymentLinkId={paymentLinkId} />
-        <DecisionPanel requestId={requestId} state={current?.state ?? null} deterministic={deterministic} ai={ai} />
+        <StateMachineViz events={events} forceIdle={!showLive} />
+        <UpiCollectCard requestId={displayRequestId} state={displayState} paymentLinkId={displayPaymentLinkId} />
+        <DecisionPanel requestId={displayRequestId} state={displayState} deterministic={displayDeterministic} ai={displayAi} />
         <ReconciliationRecord
-          requestId={requestId}
-          finalOutcome={finalOutcome}
-          razorpayPaymentId={razorpayPaymentId}
-          paymentLinkId={paymentLinkId}
-          timestamps={deriveTimestamps(events)}
-          deterministic={deterministic}
-          ai={ai}
-          extras={reconciliationExtras}
-          failureReason={failureReason}
+          requestId={displayRequestId}
+          finalOutcome={displayFinalOutcome}
+          razorpayPaymentId={displayRazorpayPaymentId}
+          paymentLinkId={displayPaymentLinkId}
+          timestamps={displayTimestamps}
+          deterministic={displayDeterministic}
+          ai={displayAi}
+          extras={displayExtras}
+          failureReason={displayFailureReason}
         />
       </div>
 
-      <RawTrafficViewer requestId={requestId} paymentRequiredHeader={null} paymentSignatureHeader={null} paymentResponseHeader={null} />
+      <RawTrafficViewer requestId={displayRequestId} paymentRequiredHeader={null} paymentSignatureHeader={null} paymentResponseHeader={null} />
     </main>
   );
 }

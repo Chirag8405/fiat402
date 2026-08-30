@@ -41,6 +41,17 @@ import { isKnownState, type FiatEvent, type RequestState } from "../lib/events";
 export interface StateMachineVizProps {
   /** Full event trail for the currently-tracked request, oldest first (see this file's top comment on why "latest only" isn't enough). */
   events: FiatEvent[];
+  /**
+   * When true, renders the idle empty state regardless of `events`/the
+   * internal queue -- driven by ../app/page.tsx's manual Reset control.
+   * Deliberately does NOT clear or otherwise touch `queue`: `events` keeps
+   * flowing in and the queue keeps accumulating underneath exactly as
+   * before, so flipping this back to false (page.tsx's "Show last", or a
+   * genuinely new request arriving) shows the exact same frame instantly --
+   * no replay of the pending->approved->settled animation, since nothing
+   * was ever actually reset.
+   */
+  forceIdle?: boolean;
 }
 
 interface Stage {
@@ -93,16 +104,6 @@ const MIN_VISIBLE_MS = 800;
 
 /** States after which the request is genuinely done -- nothing further is ever published for it. */
 const TERMINAL_STATES: ReadonlySet<RequestState> = new Set(["settled", "failed"]);
-
-/**
- * How long the rail leaves a terminal frame on screen before resetting to
- * idle. Only the rail resets -- DecisionPanel/ReconciliationRecord keep
- * showing the same terminal request indefinitely, per their own stated
- * purpose as a durable audit view (see this file's sibling components' top
- * comments). This value only needs to be "long enough to read," not tied to
- * any protocol timing.
- */
-const IDLE_RESET_MS = 4000;
 
 export interface QueueState {
   requestId: string;
@@ -168,16 +169,8 @@ export function advanceQueue(prev: QueueState): QueueState {
   return { requestId: prev.requestId, displayed: [...prev.displayed, next!], pending: rest };
 }
 
-export function StateMachineViz({ events }: StateMachineVizProps) {
+export function StateMachineViz({ events, forceIdle = false }: StateMachineVizProps) {
   const [queue, setQueue] = useState<QueueState | null>(null);
-  // The requestId whose rail should render as idle even though `queue` still
-  // holds its (fully-played-out) history. Deliberately NOT the same thing as
-  // clearing `queue` itself -- resetting `queue` to null would make the next
-  // arrival of the very same events replay the whole rail from scratch via
-  // enqueueNewStates' "!prev" branch, which is not what "idle" means here.
-  // page.tsx's `trail` (which DecisionPanel/ReconciliationRecord read) is
-  // untouched by any of this -- this component owns its own idle notion.
-  const [dismissedRequestId, setDismissedRequestId] = useState<string | null>(null);
 
   // Enqueue newly-seen states whenever a new trail (or a longer version of
   // the current one) arrives. Only ever appends -- never removes or
@@ -200,28 +193,8 @@ export function StateMachineViz({ events }: StateMachineVizProps) {
     return () => clearTimeout(timer);
   }, [queue]);
 
-  // Once the queue has fully played out onto a terminal state (settled|failed
-  // -- the request is genuinely done; nothing more is ever published for it,
-  // see TERMINAL_STATES' doc comment), leave the terminal frame up for
-  // IDLE_RESET_MS so it's actually readable, then reset the rail to idle. A
-  // genuinely new request arrives with a different requestId, which
-  // `dismissedRequestId` won't match, so it renders normally regardless of
-  // this timer's state.
-  useEffect(() => {
-    if (!queue || queue.pending.length > 0) return;
-    const lastDisplayed = queue.displayed[queue.displayed.length - 1];
-    if (!lastDisplayed || !TERMINAL_STATES.has(lastDisplayed)) return;
-
-    const timer = setTimeout(() => {
-      setDismissedRequestId(queue.requestId);
-    }, IDLE_RESET_MS);
-
-    return () => clearTimeout(timer);
-  }, [queue]);
-
-  const isDismissed = queue !== null && queue.requestId === dismissedRequestId;
-  const requestId = isDismissed ? null : (queue?.requestId ?? null);
-  const history = isDismissed ? [] : (queue?.displayed ?? []);
+  const requestId = forceIdle ? null : (queue?.requestId ?? null);
+  const history = forceIdle ? [] : (queue?.displayed ?? []);
   const current = history[history.length - 1] ?? null;
   const visited = new Set(history);
 
@@ -231,8 +204,8 @@ export function StateMachineViz({ events }: StateMachineVizProps) {
   // apps/facilitator/src/server.ts's awaitDeclineSignal) are three different
   // stories that all used to collapse into an undifferentiated "failed"
   // node here. Only shown while the rail itself is showing the terminal
-  // frame -- disappears along with the rest of the rail on idle-reset above;
-  // ReconciliationRecord keeps showing it as the durable audit record.
+  // frame -- disappears along with the rest of the rail when `forceIdle` is
+  // set; ReconciliationRecord keeps showing it as the durable audit record.
   const terminalReason =
     current && TERMINAL_STATES.has(current) ? ([...events].reverse().find(event => event.state === current)?.meta.reason ?? null) : null;
 
