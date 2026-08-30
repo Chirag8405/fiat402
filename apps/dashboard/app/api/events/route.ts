@@ -8,23 +8,34 @@
  * held-open connection doesn't fit Vercel's serverless model reliably, so
  * the dashboard now polls this route instead of subscribing.
  *
- * Query param `since`: an ISO 8601 timestamp (a FiatEvent's own `timestamp`
- * field -- chosen over a synthetic index because it's already on the wire
- * and needs no extra bookkeeping). Missing or unparseable `since` is treated
- * as "no cursor yet": every event currently in the bounded list is returned
- * rather than erroring, so an absent/malformed query param degrades
- * gracefully instead of breaking the client's poll loop.
+ * No `since`/cursor parameter, deliberately -- this route always returns the
+ * FULL current contents of the bounded list (sorted, deduped downstream in
+ * app/page.tsx), not just events newer than some client-supplied watermark.
+ *
+ * An earlier cursor-based version filtered to `timestamp > since` and
+ * advanced the cursor to the max timestamp seen each poll. That's unsafe:
+ * two independent, unsynchronized publishers can append to this same list
+ * concurrently (e.g. razorpay/webhook-handler.ts's "approved" transition and
+ * server.ts's subsequent "settled" transition, triggered the instant
+ * awaitResolution's pub/sub subscriber sees "approved" -- which can complete
+ * its own LPUSH before the "approved" publisher's LPUSH, still in flight on
+ * a separate REST call, actually lands). If a poll's LRANGE snapshot caught
+ * "settled" but not yet "approved" (still landing), the cursor would advance
+ * past "settled"'s timestamp -- and once "approved" (an earlier timestamp)
+ * did land, `timestamp > cursor` would exclude it from every future poll,
+ * permanently, not just delay it. Sorting the events within one snapshot
+ * (still done below) can't fix data that simply wasn't in that snapshot yet.
+ *
+ * Fetching the full bounded list every poll removes that failure mode
+ * entirely: nothing is ever permanently excluded by a watermark, only
+ * re-sent until it ages out of the 200-entry LTRIM window. This trades a
+ * small amount of extra payload per poll (a small, bounded list) for
+ * correctness -- appropriate at this app's demo scale, not worth a more
+ * complex ordering guarantee (e.g. sequence numbers).
  *
  * Uses this package's own self-contained Redis client (../../../lib/redis)
  * -- no import from apps/facilitator/, per that file's own top-of-file
  * comment on why (Vercel only installs this package's own node_modules).
- *
- * Returns `{ events, cursor }`: `events` is only those newer than `since`
- * (or the full ~200-event buffer on the no-cursor/malformed path), oldest
- * first. `cursor` is the newest returned event's timestamp, or -- when
- * nothing new was found -- the original `since` (falling back to the epoch
- * when there was no `since` at all), so a client with no events yet still
- * gets a cursor to poll forward from next time.
  */
 
 import { redisClient } from "../../../lib/redis";
@@ -32,8 +43,6 @@ import { EVENTS_RECENT_LIST, type FiatEvent } from "../../../lib/types";
 import { isFiatEventShape } from "../../../lib/events";
 
 export const runtime = "nodejs";
-
-const EPOCH = new Date(0).toISOString();
 
 /**
  * Parses one Redis list entry into a FiatEvent. `@upstash/redis` tries to
@@ -55,30 +64,15 @@ function parseListItem(item: unknown): FiatEvent | null {
   return isFiatEventShape(candidate) ? candidate : null;
 }
 
-export async function GET(request: Request): Promise<Response> {
-  const url = new URL(request.url);
-  const sinceParam = url.searchParams.get("since");
-  const sinceMs = sinceParam ? Date.parse(sinceParam) : NaN;
-  const hasValidSince = sinceParam !== null && !Number.isNaN(sinceMs);
-
-  // LPUSH order is NOT trustworthy as chronological order: two independent,
-  // unsynchronized publishers can append to this same list concurrently (e.g.
-  // razorpay/webhook-handler.ts's "approved" transition and server.ts's
-  // subsequent "settled" transition, triggered the instant awaitResolution's
-  // pub/sub subscriber sees "approved" -- which can happen before the
-  // publisher's own LPUSH for that same event has completed). Sorting by each
-  // event's own `timestamp` (authoritative -- it's what `since`/`cursor`
-  // already key off) fixes display order regardless of which LPUSH actually
-  // landed first on the wire.
+export async function GET(): Promise<Response> {
+  // LPUSH order is NOT trustworthy as chronological order (see this file's
+  // top comment) -- sort by each event's own `timestamp` regardless of the
+  // order they came back from LRANGE.
   const raw = await redisClient.lrange<unknown>(EVENTS_RECENT_LIST, 0, 199);
   const events = raw
     .map(parseListItem)
     .filter((event): event is FiatEvent => event !== null)
     .sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
 
-  const filtered = hasValidSince ? events.filter(event => Date.parse(event.timestamp) > sinceMs) : events;
-
-  const cursor = filtered.length > 0 ? filtered[filtered.length - 1]!.timestamp : (sinceParam ?? EPOCH);
-
-  return Response.json({ events: filtered, cursor });
+  return Response.json({ events });
 }

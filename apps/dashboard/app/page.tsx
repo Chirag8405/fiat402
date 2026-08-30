@@ -5,18 +5,30 @@
  * route's top-of-file comment) -- replaces the former EventSource connection
  * to /api/stream (deleted; a held-open SSE connection didn't fit Vercel's
  * serverless model reliably). Polling lifecycle:
- *   - Every POLL_INTERVAL_MS, fetch /api/events?since=<cursor>, where
- *     `cursor` starts null (first poll fetches whatever's currently
- *     buffered) and is then set to the response's own `cursor` field.
+ *   - Every POLL_INTERVAL_MS, fetch /api/events (no cursor -- see that
+ *     route's top comment on why the earlier cursor-based version was
+ *     unsafe: it could permanently exclude an event that raced behind a
+ *     later-timestamped sibling's LPUSH). Each poll returns the FULL current
+ *     bounded list, sorted by timestamp.
+ *   - Each raw event: parse JSON, validate the FiatEvent shape, validate
+ *     `state` is known before deriving anything from it; an unknown state is
+ *     console.warn'd and otherwise dropped here (each panel that touches
+ *     `state` -- StateMachineViz in particular -- has its own
+ *     belt-and-suspenders guard too).
+ *   - `reconstructTrail` then rebuilds `trail` from scratch every poll
+ *     (picks the most recently active requestId, dedupes its events by
+ *     `state`) rather than accumulating incrementally -- a given
+ *     (requestId, state) pair is idempotent to see more than once, so
+ *     reprocessing the whole list every time is safe and simple at this
+ *     app's demo scale. `trailsEqual` then keeps `trail`'s reference stable
+ *     across polls that carry no new data for the current request --
+ *     load-bearing, not just tidy: the Reset/Show-last feature below and the
+ *     Postgres-fallback effect both depend on `trail` NOT changing identity
+ *     when nothing actually changed.
  *   - A successful poll -> "polling" status with a lastPolledAt timestamp,
  *     visible on ConnectionIndicator.
  *   - A failed poll (network error or non-OK response) -> "connection-issue"
  *     status; the loop keeps retrying on the same interval regardless.
- *   - Each event within a batch: parse JSON, validate the FiatEvent shape,
- *     validate `state` is known before deriving anything from it; an unknown
- *     state is console.warn'd and otherwise dropped here (each panel that
- *     touches `state` -- StateMachineViz in particular -- has its own
- *     belt-and-suspenders guard too).
  *
  * `fiat402:events` now optionally carries decision-layer fields
  * (aiRecommendation/aiJustification/aiProvider/deterministicDecision/
@@ -37,18 +49,13 @@ import { StateMachineViz } from "../components/StateMachineViz";
 import { DecisionPanel, type DeterministicDecision, type AiAdvisory } from "../components/DecisionPanel";
 import { ReconciliationRecord, type ObservedTimestamps, type ReconciliationExtras } from "../components/ReconciliationRecord";
 import { isFiatEventShape, isKnownState, type FiatEvent } from "../lib/events";
+import { reconstructTrail, trailsEqual, type RequestTrail } from "../lib/trail";
 import type { ReconciliationRecordDto } from "../lib/types";
 
 const POLL_INTERVAL_MS = 2500;
 
-interface RequestTrail {
-  requestId: string;
-  events: FiatEvent[];
-}
-
 interface EventsResponse {
   events: unknown[];
-  cursor: string;
 }
 
 function emptyTimestamps(): ObservedTimestamps {
@@ -173,48 +180,30 @@ export default function DashboardPage() {
 
   useEffect(() => {
     let cancelled = false;
-    let cursor: string | null = null;
-
-    function applyEvent(parsed: FiatEvent): void {
-      // Functional updater, deliberately: when a poll batch contains several
-      // events for the same request (a fast payment can resolve
-      // pending->approved->settled within one batch), React 18 batches every
-      // setTrail call in this loop into a single re-render -- but a
-      // functional updater still applies each call in order against the
-      // running state, so `trail.events` ends up with the full sequence
-      // rather than only the last event. StateMachineViz's own
-      // minimum-visible-duration queue depends on receiving that full
-      // sequence, not just the latest state -- see that component's
-      // top-of-file comment.
-      setTrail(prev => {
-        if (!prev || prev.requestId !== parsed.requestId) {
-          return { requestId: parsed.requestId, events: [parsed] };
-        }
-        return { requestId: prev.requestId, events: [...prev.events, parsed] };
-      });
-    }
 
     async function poll(): Promise<void> {
       try {
-        const url = cursor ? `/api/events?since=${encodeURIComponent(cursor)}` : "/api/events";
-        const response = await fetch(url);
+        const response = await fetch("/api/events");
         if (!response.ok) throw new Error(`poll failed with status ${response.status}`);
 
         const data = (await response.json()) as EventsResponse;
         if (cancelled) return;
 
-        cursor = data.cursor;
         setStatus("polling");
         setLastPolledAt(new Date().toISOString());
 
+        const validEvents: FiatEvent[] = [];
         for (const raw of data.events) {
           if (!isFiatEventShape(raw)) continue;
           if (!isKnownState(raw.state)) {
             console.warn(`page: received unrecognized state "${raw.state}" for request ${raw.requestId}; ignoring`);
             continue;
           }
-          applyEvent(raw);
+          validEvents.push(raw);
         }
+
+        const next = reconstructTrail(validEvents);
+        setTrail(prev => (trailsEqual(prev, next) ? prev : next));
       } catch (err) {
         if (!cancelled) setStatus("connection-issue");
         console.warn("page: poll against /api/events failed", err);
