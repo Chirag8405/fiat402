@@ -30,6 +30,7 @@
 
 import { useEffect, useState } from "react";
 import { ConnectionIndicator, type ConnectionStatus } from "../components/ConnectionIndicator";
+import { AgentConsole } from "../components/AgentConsole";
 import { RawTrafficViewer } from "../components/RawTrafficViewer";
 import { UpiCollectCard } from "../components/UpiCollectCard";
 import { StateMachineViz } from "../components/StateMachineViz";
@@ -221,6 +222,10 @@ export default function DashboardPage() {
   const paymentLinkId = [...events].reverse().find(event => event.meta.paymentLinkId)?.meta.paymentLinkId ?? null;
   const razorpayPaymentId = [...events].reverse().find(event => event.meta.razorpayPaymentId)?.meta.razorpayPaymentId ?? null;
   const finalOutcome = current?.state === "settled" || current?.state === "failed" ? current.state : null;
+  // Only derivable from the live trail -- see ReconciliationRecord.tsx's
+  // `failureReason` doc comment for why the Postgres fallback can't supply
+  // this (no reason column on that table).
+  const failureReason = current?.state === "failed" ? (current.meta.reason ?? null) : null;
   const liveDecision = deriveDecision(events);
   const hasLiveDecision = liveDecision.deterministic !== null || liveDecision.ai !== null;
 
@@ -299,6 +304,8 @@ export default function DashboardPage() {
         <ConnectionIndicator status={status} lastPolledAt={lastPolledAt} />
       </header>
 
+      <AgentConsole />
+
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <StateMachineViz events={events} />
         <UpiCollectCard requestId={requestId} state={current?.state ?? null} paymentLinkId={paymentLinkId} />
@@ -312,6 +319,7 @@ export default function DashboardPage() {
           deterministic={deterministic}
           ai={ai}
           extras={reconciliationExtras}
+          failureReason={failureReason}
         />
       </div>
 

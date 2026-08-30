@@ -32,6 +32,16 @@
  * also calls satisfyConfirmGate on payment_link.paid/payment.captured) --
  * that path needs no dashboard action at all, since it just moves `state`
  * off "pending" on the next poll.
+ *
+ * Decline action: symmetric to Confirm, but available whenever `state ===
+ * "pending"` regardless of aiRecommendation (approve or hold) -- a human
+ * actively saying no, not just a new gate on every payment. POSTs to
+ * /api/decline/:requestId (same auth-proxy pattern). Unlike Confirm, this
+ * doesn't require a hold: it's the only way for a human to actively stop a
+ * plain "approve" request that's just waiting on the payer, short of
+ * silently ignoring it until it times out. See
+ * apps/facilitator/src/server.ts's awaitDeclineSignal for how this reaches
+ * an in-flight /settle call regardless of which wait it's currently in.
  */
 
 import { useEffect, useState } from "react";
@@ -69,58 +79,79 @@ function isDivergent(deterministic: DeterministicDecision, ai: AiAdvisory): bool
   return deterministic.allowed && ai.recommendation !== "approve";
 }
 
-type ConfirmPhase = "idle" | "confirming" | "confirmed" | "error";
+type GatePhase = "idle" | "busy" | "done" | "error";
 
-function ConfirmButton({ requestId }: { requestId: string }) {
-  const [phase, setPhase] = useState<ConfirmPhase>("idle");
+/**
+ * Shared phase-machine + rendering for Confirm and Decline: both POST to a
+ * same-origin proxy route keyed by requestId, both reset when the tracked
+ * request changes, both need a focal/secondary tone distinction and an
+ * inline error-with-retry affordance. Only the endpoint, labels, and tone
+ * differ, which is genuinely all that separates them -- see ConfirmButton/
+ * DeclineButton below.
+ */
+function GateActionButton({
+  requestId,
+  endpoint,
+  idleLabel,
+  busyLabel,
+  doneLabel,
+  variant,
+}: {
+  requestId: string;
+  endpoint: string;
+  idleLabel: string;
+  busyLabel: string;
+  doneLabel: string;
+  variant: "focal" | "secondary";
+}) {
+  const [phase, setPhase] = useState<GatePhase>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  // Reset whenever the request being shown changes -- a stale "confirmed"
-  // label must never carry over onto a different request's hold.
+  // Reset whenever the request being shown changes -- a stale "done" label
+  // must never carry over onto a different request.
   useEffect(() => {
     setPhase("idle");
     setErrorMessage(null);
   }, [requestId]);
 
-  async function handleConfirm(): Promise<void> {
-    setPhase("confirming");
+  async function handleClick(): Promise<void> {
+    setPhase("busy");
     setErrorMessage(null);
     try {
-      const res = await fetch(`/api/confirm-gate/${encodeURIComponent(requestId)}`, { method: "POST" });
+      const res = await fetch(`${endpoint}/${encodeURIComponent(requestId)}`, { method: "POST" });
       if (!res.ok) {
         const body = (await res.json().catch(() => null)) as { error?: string } | null;
         setErrorMessage(body?.error ?? `request failed with status ${res.status}`);
         setPhase("error");
         return;
       }
-      setPhase("confirmed");
+      setPhase("done");
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : String(err));
       setPhase("error");
     }
   }
 
-  const label = phase === "confirming" ? "Confirming…" : phase === "confirmed" ? "Confirmed — waiting for payment" : "Confirm";
-  const disabled = phase === "confirming" || phase === "confirmed";
+  const label = phase === "busy" ? busyLabel : phase === "done" ? doneLabel : idleLabel;
+  const disabled = phase === "busy" || phase === "done";
 
   return (
     <div className="flex flex-col items-center gap-1.5">
       <button
         type="button"
-        onClick={() => void handleConfirm()}
+        onClick={() => void handleClick()}
         disabled={disabled}
         className={cn(
-          "rounded-full px-5 py-2 text-sm font-semibold",
-          "transition-[transform,opacity,background-color] duration-150 ease-[var(--ease-out)]",
-          "active:scale-[0.97]",
-          phase === "confirmed"
+          "rounded-full transition-[transform,opacity,background-color] duration-150 ease-[var(--ease-out)] active:scale-[0.97]",
+          variant === "focal" ? "px-5 py-2 text-sm font-semibold" : "px-4 py-1.5 text-xs font-medium",
+          phase === "done"
             ? "border border-success/50 bg-success/10 text-success"
-            : "bg-primary text-primary-foreground shadow-[0_0_0_4px] shadow-primary/15 disabled:opacity-70",
+            : variant === "focal"
+              ? "bg-primary text-primary-foreground shadow-[0_0_0_4px] shadow-primary/15 disabled:opacity-70"
+              : "border border-danger/40 bg-danger/10 text-danger disabled:opacity-70",
         )}
       >
-        <span
-          className={cn("inline-block transition-[filter,opacity] duration-150 ease-[var(--ease-out)]", phase === "confirming" && "opacity-70 blur-[1.5px]")}
-        >
+        <span className={cn("inline-block transition-[filter,opacity] duration-150 ease-[var(--ease-out)]", phase === "busy" && "opacity-70 blur-[1.5px]")}>
           {label}
         </span>
       </button>
@@ -129,11 +160,40 @@ function ConfirmButton({ requestId }: { requestId: string }) {
   );
 }
 
+function ConfirmButton({ requestId }: { requestId: string }) {
+  return (
+    <GateActionButton
+      requestId={requestId}
+      endpoint="/api/confirm-gate"
+      idleLabel="Confirm"
+      busyLabel="Confirming…"
+      doneLabel="Confirmed — waiting for payment"
+      variant="focal"
+    />
+  );
+}
+
+function DeclineButton({ requestId }: { requestId: string }) {
+  return (
+    <GateActionButton
+      requestId={requestId}
+      endpoint="/api/decline"
+      idleLabel="Decline"
+      busyLabel="Declining…"
+      doneLabel="Declined"
+      variant="secondary"
+    />
+  );
+}
+
 export function DecisionPanel({ requestId, state, deterministic, ai }: DecisionPanelProps) {
   const divergent = deterministic && ai ? isDivergent(deterministic, ai) : false;
   const failClosed = ai?.provider === "fail-closed";
   const normalizedRecommendation = ai?.recommendation === "hold" || ai?.recommendation === "approve" ? ai.recommendation : undefined;
   const pendingHold = requestId !== null && isPendingHold(state, normalizedRecommendation);
+  // Decline is available on ANY pending request, hold or not -- pendingHold
+  // is the narrower "genuinely gated" case Confirm cares about.
+  const pending = requestId !== null && state === "pending";
 
   return (
     <Card>
@@ -194,12 +254,21 @@ export function DecisionPanel({ requestId, state, deterministic, ai }: DecisionP
               )}
             </div>
             {pendingHold && requestId && (
-              <div className="col-span-2 flex flex-col items-center gap-2 border-t border-primary/20 pt-3">
+              <div className="col-span-2 flex flex-col items-center gap-3 border-t border-primary/20 pt-3">
                 <p className="text-center text-[11px] font-medium text-primary">
                   A human decision is needed here -- the payment is genuinely blocked server-side until this is confirmed, or the payer pays the Payment Link
                   directly.
                 </p>
-                <ConfirmButton requestId={requestId} />
+                <div className="flex items-center gap-2">
+                  <ConfirmButton requestId={requestId} />
+                  <DeclineButton requestId={requestId} />
+                </div>
+              </div>
+            )}
+            {pending && !pendingHold && requestId && (
+              <div className="col-span-2 flex flex-col items-center gap-2 border-t border-border pt-3">
+                <p className="text-center text-[11px] text-muted-foreground">Waiting on the payer -- decline to stop this instead of waiting it out.</p>
+                <DeclineButton requestId={requestId} />
               </div>
             )}
             {divergent && !pendingHold && (

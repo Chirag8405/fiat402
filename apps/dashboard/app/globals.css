@@ -43,3 +43,32 @@ body {
 .live-pulse {
   animation: pulse-ring 1.6s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
+
+/* AgentConsole: each streamed line's one-shot entrance -- feedback that a
+   real step just happened, not decorative. Fires once per line (never
+   re-triggered on the same element), so a keyframe restarting from zero is
+   fine here -- unlike a rapidly re-triggered element, there's no
+   interruption case to worry about. */
+@keyframes console-line-in {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.console-line {
+  animation: console-line-in 160ms var(--ease-out);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-pulse {
+    animation: none;
+  }
+  .console-line {
+    animation: none;
+  }
+}

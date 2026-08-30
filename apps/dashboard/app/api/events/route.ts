@@ -61,12 +61,20 @@ export async function GET(request: Request): Promise<Response> {
   const sinceMs = sinceParam ? Date.parse(sinceParam) : NaN;
   const hasValidSince = sinceParam !== null && !Number.isNaN(sinceMs);
 
-  // LPUSH means the list is newest-first; reverse to chronological order.
+  // LPUSH order is NOT trustworthy as chronological order: two independent,
+  // unsynchronized publishers can append to this same list concurrently (e.g.
+  // razorpay/webhook-handler.ts's "approved" transition and server.ts's
+  // subsequent "settled" transition, triggered the instant awaitResolution's
+  // pub/sub subscriber sees "approved" -- which can happen before the
+  // publisher's own LPUSH for that same event has completed). Sorting by each
+  // event's own `timestamp` (authoritative -- it's what `since`/`cursor`
+  // already key off) fixes display order regardless of which LPUSH actually
+  // landed first on the wire.
   const raw = await redisClient.lrange<unknown>(EVENTS_RECENT_LIST, 0, 199);
   const events = raw
     .map(parseListItem)
     .filter((event): event is FiatEvent => event !== null)
-    .reverse();
+    .sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
 
   const filtered = hasValidSince ? events.filter(event => Date.parse(event.timestamp) > sinceMs) : events;
 

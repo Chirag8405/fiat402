@@ -25,6 +25,14 @@ dotenv.config({ path: path.resolve(__dirname, "../../.env") });
  */
 const nextConfig: NextConfig = {
   serverExternalPackages: ["pg", "@upstash/redis", "razorpay"],
+  // @fiat402/x402-upi-client's package.json points `main`/`types` straight at
+  // its raw TypeScript source (../../x402-upi-client/src/index.ts, run
+  // directly via tsx outside this app) -- Next's bundler only transpiles
+  // node_modules packages that opt in here; without this, importing it from
+  // app/api/simulate/route.ts fails to build (raw .ts inside node_modules).
+  // Its own type-only import from @fiat402/scheme-upi is erased at compile
+  // time, so that package needs no entry here.
+  transpilePackages: ["@fiat402/x402-upi-client"],
 };
 
 export default nextConfig;

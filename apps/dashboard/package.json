@@ -11,7 +11,10 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@fiat402/x402-upi-client": "file:../../x402-upi-client",
     "@upstash/redis": "^1.34.3",
+    "@x402/core": "^2.23.0",
+    "@x402/fetch": "^2.23.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "dotenv": "^17.4.2",

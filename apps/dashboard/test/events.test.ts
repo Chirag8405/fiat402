@@ -63,6 +63,26 @@ describe("GET /api/events", () => {
     expect(body.cursor).toBe(newer.timestamp);
   });
 
+  it("orders events by their own timestamp, not by raw list order -- two concurrent publishers can LPUSH out of chronological order", async () => {
+    // Simulates the exact race this fixes: webhook-handler.ts's "approved"
+    // transition and server.ts's subsequent "settled" transition are two
+    // independent, unsynchronized publish+lpush chains against the same
+    // list -- "settled"'s LPUSH can land before "approved"'s own LPUSH
+    // completes, even though "approved" has an earlier `timestamp`. The list
+    // here is deliberately NOT newest-first (LPUSH order); if this route
+    // trusted raw list order instead of sorting by `timestamp`, it would
+    // return "settled" before "approved".
+    const approved = buildEvent({ state: "approved", timestamp: "2026-01-01T00:00:05.000Z" });
+    const settled = buildEvent({ state: "settled", timestamp: "2026-01-01T00:00:06.000Z" });
+    lrangeMock.mockResolvedValue([settled, approved]);
+
+    const response = await GET(requestWithSince());
+    const body = (await response.json()) as { events: FiatEvent[]; cursor: string };
+
+    expect(body.events).toEqual([approved, settled]);
+    expect(body.cursor).toBe(settled.timestamp);
+  });
+
   it("treats a malformed since param as no cursor and returns the buffered events instead of erroring", async () => {
     const event = buildEvent();
     lrangeMock.mockResolvedValue([event]);

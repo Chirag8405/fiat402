@@ -186,7 +186,7 @@ describe("razorpayWebhookHandler — state transitions", () => {
     expect(redis.store.get(`confirm-gate:${REQUEST_ID}`)).toBe("1");
     const gateMessages = redis.published.filter(p => p.channel === "fiat402:confirm-gate");
     expect(gateMessages).toHaveLength(1);
-    expect(JSON.parse(gateMessages[0]!.message)).toEqual({ requestId: REQUEST_ID });
+    expect(JSON.parse(gateMessages[0]!.message)).toEqual({ requestId: REQUEST_ID, decision: "confirm" });
   });
 
   it("is idempotent when a human already confirmed the gate before paying", async () => {

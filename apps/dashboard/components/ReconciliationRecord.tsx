@@ -57,6 +57,16 @@ export interface ReconciliationRecordProps {
   deterministic: DeterministicDecision | null;
   ai: AiAdvisory | null;
   extras: ReconciliationExtras;
+  /**
+   * The terminal FiatEvent's own `meta.reason` (e.g. "ai-hold-timed-out",
+   * "timeout", "human-declined", "payment-declined") -- only ever derivable
+   * from the live event trail (app/page.tsx), never the Postgres fallback
+   * record, since ReconciliationRecord (the DB row) has no reason column.
+   * Distinguishing these matters: a hold nobody confirmed, a payer who
+   * never paid, and a human actively saying no are three different stories,
+   * not one generic "expired".
+   */
+  failureReason: string | null;
 }
 
 function Field({ label, value, mono }: { label: string; value: React.ReactNode; mono?: boolean }) {
@@ -79,6 +89,7 @@ export function ReconciliationRecord({
   deterministic,
   ai,
   extras,
+  failureReason,
 }: ReconciliationRecordProps) {
   return (
     <Card>
@@ -93,6 +104,7 @@ export function ReconciliationRecord({
           <div className="grid grid-cols-2 gap-x-4 gap-y-3">
             <Field mono label="Request ID" value={<span className="break-all">{requestId}</span>} />
             <Field label="Final outcome" value={<Badge variant={finalOutcome === "settled" ? "success" : "danger"}>{finalOutcome}</Badge>} />
+            {finalOutcome === "failed" && <Field mono label="Failure reason" value={failureReason} />}
             <Field mono label="Razorpay payment_id" value={razorpayPaymentId && <span className="break-all">{razorpayPaymentId}</span>} />
             <Field mono label="Payment Link" value={paymentLinkId && <span className="break-all">{paymentLinkId}</span>} />
             <Field label="Deterministic decision" value={deterministic ? (deterministic.allowed ? "allowed" : "rejected") : null} />

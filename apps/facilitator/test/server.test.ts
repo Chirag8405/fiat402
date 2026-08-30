@@ -425,6 +425,68 @@ describe("POST /settle — AI hold / confirm-gate", () => {
   });
 });
 
+describe("POST /settle — human decline", () => {
+  it("unblocks a still-unconfirmed hold immediately via /internal/decline, without waiting for its timeout", async () => {
+    // Regression target: a naive decline (just publishing a "declined"
+    // FiatEvent the way the webhook handler does) would be silently ignored
+    // by awaitResolution (intentional, for the UPI-retry case) and would
+    // never even reach awaitConfirmGate at all -- the in-flight /settle call
+    // would ride out its full maxTimeoutSeconds regardless. This exercises
+    // the real declineConfirmGate -> awaitConfirmGate signal path instead.
+    createUpiPaymentLinkMock.mockResolvedValue({ ok: true, paymentLinkId: "plink_decline_hold", shortUrl: "https://rzp.io/i/decline-hold" });
+    fetchImplMock.mockResolvedValue(geminiResponse("hold"));
+    await startServer();
+
+    const requirements = buildRequirements();
+    const payload = buildPayload(requirements, "order-decline-hold-1");
+    const requestId = deriveRequestId(requirements, payload);
+
+    const settlePromise = postSettle(requirements, payload);
+
+    await waitFor(() => createUpiPaymentLinkMock.mock.calls.length === 1);
+    expect(await redis.get(`confirm-gate:${requestId}`)).toBe("0");
+
+    const declineRes = await fetch(`${baseUrl}/internal/decline/${requestId}`, { method: "POST" });
+    expect(declineRes.status).toBe(200);
+
+    const { status, body } = await settlePromise;
+
+    expect(status).toBe(200);
+    expect(body).toMatchObject({ success: false, errorReason: "human-declined", transaction: "" });
+    expect(await redis.get(`req:${requestId}:state`)).toBe("failed");
+    expect(pg.calls).toHaveLength(1);
+    expect(cancelUpiPaymentLinkMock).toHaveBeenCalledWith("plink_decline_hold");
+  });
+
+  it("unblocks a plain payer-approval wait via /internal/decline, for a request that was never a hold", async () => {
+    // Decline must work on ANY pending request, not just holds -- this one
+    // never goes through awaitConfirmGate at all (recommendation is
+    // "proceed"), so the signal has to reach the resolutionPromise/
+    // declineWaitPromise race directly.
+    createUpiPaymentLinkMock.mockResolvedValue({ ok: true, paymentLinkId: "plink_decline_approve", shortUrl: "https://rzp.io/i/decline-approve" });
+    fetchImplMock.mockResolvedValue(geminiResponse("proceed"));
+    await startServer();
+
+    const requirements = buildRequirements();
+    const payload = buildPayload(requirements, "order-decline-approve-1");
+    const requestId = deriveRequestId(requirements, payload);
+
+    const settlePromise = postSettle(requirements, payload);
+
+    await waitFor(() => createUpiPaymentLinkMock.mock.calls.length === 1);
+
+    const declineRes = await fetch(`${baseUrl}/internal/decline/${requestId}`, { method: "POST" });
+    expect(declineRes.status).toBe(200);
+
+    const { status, body } = await settlePromise;
+
+    expect(status).toBe(200);
+    expect(body).toMatchObject({ success: false, errorReason: "human-declined", transaction: "" });
+    expect(await redis.get(`req:${requestId}:state`)).toBe("failed");
+    expect(cancelUpiPaymentLinkMock).toHaveBeenCalledWith("plink_decline_approve");
+  });
+});
+
 describe("POST /settle — timeout", () => {
   it("resolves cleanly as a 402-equivalent SettlementResponse, not a hung connection, when awaitResolution times out", async () => {
     createUpiPaymentLinkMock.mockResolvedValue({ ok: true, paymentLinkId: "plink_timeout", shortUrl: "https://rzp.io/i/timeout" });

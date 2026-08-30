@@ -91,6 +91,19 @@ function stageReached(stage: Stage, current: RequestState | null, visited: Set<R
 /** Minimum time (ms) each state is shown before the queue advances to the next one. */
 const MIN_VISIBLE_MS = 800;
 
+/** States after which the request is genuinely done -- nothing further is ever published for it. */
+const TERMINAL_STATES: ReadonlySet<RequestState> = new Set(["settled", "failed"]);
+
+/**
+ * How long the rail leaves a terminal frame on screen before resetting to
+ * idle. Only the rail resets -- DecisionPanel/ReconciliationRecord keep
+ * showing the same terminal request indefinitely, per their own stated
+ * purpose as a durable audit view (see this file's sibling components' top
+ * comments). This value only needs to be "long enough to read," not tied to
+ * any protocol timing.
+ */
+const IDLE_RESET_MS = 4000;
+
 export interface QueueState {
   requestId: string;
   /** States actually rendered so far, oldest first. */
@@ -157,6 +170,14 @@ export function advanceQueue(prev: QueueState): QueueState {
 
 export function StateMachineViz({ events }: StateMachineVizProps) {
   const [queue, setQueue] = useState<QueueState | null>(null);
+  // The requestId whose rail should render as idle even though `queue` still
+  // holds its (fully-played-out) history. Deliberately NOT the same thing as
+  // clearing `queue` itself -- resetting `queue` to null would make the next
+  // arrival of the very same events replay the whole rail from scratch via
+  // enqueueNewStates' "!prev" branch, which is not what "idle" means here.
+  // page.tsx's `trail` (which DecisionPanel/ReconciliationRecord read) is
+  // untouched by any of this -- this component owns its own idle notion.
+  const [dismissedRequestId, setDismissedRequestId] = useState<string | null>(null);
 
   // Enqueue newly-seen states whenever a new trail (or a longer version of
   // the current one) arrives. Only ever appends -- never removes or
@@ -179,10 +200,41 @@ export function StateMachineViz({ events }: StateMachineVizProps) {
     return () => clearTimeout(timer);
   }, [queue]);
 
-  const requestId = queue?.requestId ?? null;
-  const history = queue?.displayed ?? [];
+  // Once the queue has fully played out onto a terminal state (settled|failed
+  // -- the request is genuinely done; nothing more is ever published for it,
+  // see TERMINAL_STATES' doc comment), leave the terminal frame up for
+  // IDLE_RESET_MS so it's actually readable, then reset the rail to idle. A
+  // genuinely new request arrives with a different requestId, which
+  // `dismissedRequestId` won't match, so it renders normally regardless of
+  // this timer's state.
+  useEffect(() => {
+    if (!queue || queue.pending.length > 0) return;
+    const lastDisplayed = queue.displayed[queue.displayed.length - 1];
+    if (!lastDisplayed || !TERMINAL_STATES.has(lastDisplayed)) return;
+
+    const timer = setTimeout(() => {
+      setDismissedRequestId(queue.requestId);
+    }, IDLE_RESET_MS);
+
+    return () => clearTimeout(timer);
+  }, [queue]);
+
+  const isDismissed = queue !== null && queue.requestId === dismissedRequestId;
+  const requestId = isDismissed ? null : (queue?.requestId ?? null);
+  const history = isDismissed ? [] : (queue?.displayed ?? []);
   const current = history[history.length - 1] ?? null;
   const visited = new Set(history);
+
+  // Surfaces WHY a terminal failure happened -- "ai-hold-timed-out" (a hold
+  // nobody confirmed), "timeout" (a payer who never paid), and
+  // "human-declined" (a human actively saying no, see
+  // apps/facilitator/src/server.ts's awaitDeclineSignal) are three different
+  // stories that all used to collapse into an undifferentiated "failed"
+  // node here. Only shown while the rail itself is showing the terminal
+  // frame -- disappears along with the rest of the rail on idle-reset above;
+  // ReconciliationRecord keeps showing it as the durable audit record.
+  const terminalReason =
+    current && TERMINAL_STATES.has(current) ? ([...events].reverse().find(event => event.state === current)?.meta.reason ?? null) : null;
 
   return (
     <Card>
@@ -197,6 +249,7 @@ export function StateMachineViz({ events }: StateMachineVizProps) {
           </div>
         )}
         <Rail stages={STAGES} current={current} visited={visited} />
+        {terminalReason && <p className="mt-2 text-center font-mono text-[10.5px] text-muted-foreground">reason: {terminalReason}</p>}
       </CardContent>
     </Card>
   );

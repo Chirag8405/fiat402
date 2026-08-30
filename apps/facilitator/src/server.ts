@@ -51,7 +51,7 @@ import {
 import { redisClient } from "./store/redis";
 import { pgPool, writeReconciliationRecord, readReconciliationRecord, type PgClient, type ReconciliationRecord } from "./store/db";
 import type { EventSubscription } from "./ws";
-import { CONFIRM_GATE_CHANNEL, confirmGateKey, satisfyConfirmGate, type ConfirmGateMessage } from "./confirm-gate";
+import { CONFIRM_GATE_CHANNEL, confirmGateKey, satisfyConfirmGate, declineConfirmGate, type ConfirmGateMessage } from "./confirm-gate";
 
 /** This facilitator supports exactly one scheme/network pair. */
 const SCHEME = "upi";
@@ -61,14 +61,22 @@ const NETWORK = "upi:in";
 const TTL_BUFFER_SECONDS = 60;
 
 function isConfirmGateMessageLike(value: unknown): value is ConfirmGateMessage {
-  return !!value && typeof value === "object" && typeof (value as ConfirmGateMessage).requestId === "string";
+  return (
+    !!value &&
+    typeof value === "object" &&
+    typeof (value as ConfirmGateMessage).requestId === "string" &&
+    ((value as ConfirmGateMessage).decision === "confirm" || (value as ConfirmGateMessage).decision === "decline")
+  );
 }
 
 /**
  * Bounded, pub/sub-driven wait for a human to flip confirm-gate:{requestId}
- * to "1" -- either via POST /internal/confirm-gate/:requestId, or by paying
- * the Payment Link directly (see ./confirm-gate.ts's satisfyConfirmGate,
- * called from both that route below and razorpay/webhook-handler.ts).
+ * away from "0" -- to "1" (confirmed) via POST
+ * /internal/confirm-gate/:requestId, by paying the Payment Link directly
+ * (see ./confirm-gate.ts's satisfyConfirmGate, called from both that route
+ * below and razorpay/webhook-handler.ts), or to "declined" (declined) via
+ * POST /internal/decline/:requestId (see ./confirm-gate.ts's
+ * declineConfirmGate and this file's own /internal/decline route below).
  * Structurally mirrors state-machine.ts's awaitResolution (setTimeout +
  * subscribe + a `finish` guard so only the first of the two ever settles the
  * promise), but is not built on top of it: this waits on a gate flip, not a
@@ -85,23 +93,24 @@ function isConfirmGateMessageLike(value: unknown): value is ConfirmGateMessage {
  * hanging or rejecting.
  *
  * The initial `redis.get(confirmGateKey(...))` check right after
- * subscribing closes the race where a human confirms (and the confirm
- * endpoint publishes) in the gap between this request creating the Payment
- * Link and this function's subscription becoming active: redis.subscribe()
- * registers the listener synchronously, so any publish from that point on
- * is still caught by it regardless; the immediately-following get() only
- * needs to catch a confirmation that landed before subscribe() returned.
+ * subscribing closes the race where a human confirms/declines (and the
+ * corresponding endpoint publishes) in the gap between this request creating
+ * the Payment Link and this function's subscription becoming active:
+ * redis.subscribe() registers the listener synchronously, so any publish
+ * from that point on is still caught by it regardless; the
+ * immediately-following get() only needs to catch a decision that landed
+ * before subscribe() returned.
  */
 async function awaitConfirmGate(
   redis: FacilitatorRedisClient,
   requestId: string,
   maxTimeoutSeconds: number,
-): Promise<"confirmed" | "timed-out"> {
-  return new Promise<"confirmed" | "timed-out">(resolve => {
+): Promise<"confirmed" | "declined" | "timed-out"> {
+  return new Promise<"confirmed" | "declined" | "timed-out">(resolve => {
     let settled = false;
     let unsubscribe: () => void = () => {};
 
-    const finish = (result: "confirmed" | "timed-out"): void => {
+    const finish = (result: "confirmed" | "declined" | "timed-out"): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -136,14 +145,14 @@ async function awaitConfirmGate(
           }
         }
         if (!isConfirmGateMessageLike(parsed) || parsed.requestId !== requestId) return;
-        finish("confirmed");
+        finish(parsed.decision === "decline" ? "declined" : "confirmed");
       });
 
       subscription.on("error", (err: unknown) => {
         // Logged, not finish()ed -- a transient subscription error doesn't
-        // mean the confirmation was missed; the timeout above is the real
+        // mean the decision was missed; the timeout above is the real
         // backstop, so this must not resolve early as anything but a
-        // genuine confirmation or a genuine timeout.
+        // genuine decision or a genuine timeout.
         console.error(
           `[awaitConfirmGate] subscription error for requestId=${requestId}: ${err instanceof Error ? err.message : String(err)}`,
         );
@@ -153,6 +162,7 @@ async function awaitConfirmGate(
         .get(confirmGateKey(requestId))
         .then(gate => {
           if (gate === "1") finish("confirmed");
+          else if (gate === "declined") finish("declined");
         })
         .catch(err => {
           console.error(
@@ -162,6 +172,101 @@ async function awaitConfirmGate(
     } catch (err) {
       console.error(
         `[awaitConfirmGate] redis.subscribe failed for requestId=${requestId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      finish("timed-out");
+    }
+  });
+}
+
+/**
+ * Bounded, pub/sub-driven wait for a human decline via POST
+ * /internal/decline/:requestId (see ./confirm-gate.ts's declineConfirmGate),
+ * independent of whether this request was ever a hold. Decline is valid on
+ * ANY pending request (CLAUDE.md/plan: "not a new gate that blocks Payment
+ * Link creation on every payment"), so unlike awaitConfirmGate this has no
+ * "confirmed" outcome and is not gated behind `advisory.recommendation ===
+ * "hold"` -- it races alongside `resolutionPromise` for every request,
+ * approve or hold alike (see settlePayment).
+ *
+ * Deliberately does NOT reuse ./state-machine.ts's awaitResolution or its
+ * "declined" FiatEvent state: that function intentionally ignores webhook-
+ * published "declined" events (payment.failed) so a UPI retry can still
+ * resolve as "approved" later -- see its own doc comment. A human-initiated
+ * decline is a categorically different, final signal (a human actively
+ * saying no, not a payment provider reporting an unretriable-yet failure)
+ * and must NOT be filtered the same way, or it would never actually unblock
+ * anything -- exactly the bug this function exists to avoid.
+ *
+ * Same never-rejects, catch-and-log-every-failure-mode contract as
+ * awaitConfirmGate, for the same reason (no top-level catch in /settle's
+ * route handler).
+ */
+async function awaitDeclineSignal(
+  redis: FacilitatorRedisClient,
+  requestId: string,
+  maxTimeoutSeconds: number,
+): Promise<"declined" | "timed-out"> {
+  return new Promise<"declined" | "timed-out">(resolve => {
+    let settled = false;
+    let unsubscribe: () => void = () => {};
+
+    const finish = (result: "declined" | "timed-out"): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try {
+        unsubscribe();
+      } catch (err) {
+        console.error(
+          `[awaitDeclineSignal] unsubscribe failed for requestId=${requestId}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      resolve(result);
+    };
+
+    const timer = setTimeout(() => {
+      finish("timed-out");
+    }, maxTimeoutSeconds * 1000);
+
+    try {
+      const subscription = redis.subscribe([CONFIRM_GATE_CHANNEL]);
+      unsubscribe = () => void subscription.unsubscribe();
+
+      subscription.on("message", (message: unknown) => {
+        let parsed: unknown = message;
+        if (typeof message === "string") {
+          try {
+            parsed = JSON.parse(message);
+          } catch (err) {
+            console.error(
+              `[awaitDeclineSignal] JSON.parse failed for message on channel "${CONFIRM_GATE_CHANNEL}": ${err instanceof Error ? err.message : String(err)}`,
+            );
+            return;
+          }
+        }
+        if (!isConfirmGateMessageLike(parsed) || parsed.requestId !== requestId || parsed.decision !== "decline") return;
+        finish("declined");
+      });
+
+      subscription.on("error", (err: unknown) => {
+        console.error(
+          `[awaitDeclineSignal] subscription error for requestId=${requestId}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      });
+
+      redis
+        .get(confirmGateKey(requestId))
+        .then(gate => {
+          if (gate === "declined") finish("declined");
+        })
+        .catch(err => {
+          console.error(
+            `[awaitDeclineSignal] initial gate check failed for requestId=${requestId}: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        });
+    } catch (err) {
+      console.error(
+        `[awaitDeclineSignal] redis.subscribe failed for requestId=${requestId}: ${err instanceof Error ? err.message : String(err)}`,
       );
       finish("timed-out");
     }
@@ -476,6 +581,18 @@ export async function settlePayment(
   // function's doc comment for why (the UPI retry edge case).
   const resolutionPromise = awaitResolution(deps.redis, requestId, paymentRequirements.maxTimeoutSeconds);
 
+  // Decline is valid on ANY pending request (approve or hold), not just a
+  // gate a hold sits behind -- so this is created here, immediately
+  // alongside resolutionPromise and for the same subscription-ordering
+  // reason documented on it above: a decline sent in the gap before this
+  // subscribes would otherwise be published to nobody and lost for good.
+  // Covers the window where this request has no hold at all, or already
+  // passed its confirm-gate and is now just waiting on the payer -- the
+  // *other* window (a hold still unconfirmed) is covered by
+  // awaitConfirmGate itself below, which understands "declined" directly
+  // since it's listening on the very same channel.
+  const declineWaitPromise = awaitDeclineSignal(deps.redis, requestId, paymentRequirements.maxTimeoutSeconds);
+
   // Hoisted from just after the resolution wait (where it used to live) so
   // the ai-hold-timed-out branch below can also write a reconciliation
   // record -- every other terminal transition in this function does, and an
@@ -502,65 +619,90 @@ export async function settlePayment(
     pendingAt,
   };
 
+  // Shared terminal-failure bookkeeping for every path below that ends the
+  // request without a successful settlement while a live Payment Link still
+  // exists: transition to "failed" (writing `reason` so the dashboard/
+  // reconciliation record can distinguish *why* -- ai-hold-timed-out, a
+  // plain payer timeout, or a human decline, never a collapsed generic
+  // "expired"), write the audit record, and best-effort cancel the Payment
+  // Link. Extracted because ai-hold-timed-out and both human-decline windows
+  // below all need exactly this, byte-for-byte -- previously duplicated
+  // ai-hold-timed-out's version verbatim would have been the second copy.
+  async function finalizeCancelledFailure(reason: string): Promise<SettlementResponseBody> {
+    const failedEvent = await transitionState(deps.redis, requestId, "failed", {
+      paymentLinkId,
+      reason,
+    });
+
+    await writeReconciliationRecord(deps.pg, {
+      ...baseRecord,
+      razorpayPaymentId: null,
+      resolvedAt: failedEvent.timestamp,
+      settledAt: null,
+      failedAt: failedEvent.timestamp,
+      finalOutcome: "failed",
+    });
+
+    // Best-effort: expire_by alone isn't enough here -- Razorpay enforces a
+    // minimum 15-minute Payment Link lifetime (see RAZORPAY_MIN_EXPIRY_SECONDS
+    // above), so a request with a short maxTimeoutSeconds like this one
+    // leaves the real Payment Link payable for up to ~14 more minutes after
+    // we've already marked it "failed" -- during which a late payment would
+    // be silently dropped by webhook-handler.ts's terminal-state check
+    // (money moves, nothing reconciles it). Actively cancelling closes that
+    // window now instead of waiting on expire_by. A cancel failure (e.g. the
+    // payer completed payment in the instant before this call -- a genuine,
+    // small race) is logged, not treated as a reason to change the response.
+    const cancelResult = await cancelUpiPaymentLink(paymentLinkId);
+    if (!cancelResult.ok) {
+      console.error(
+        `[settlePayment] failed to cancel Payment Link ${paymentLinkId} after ${reason} for requestId=${requestId}: ${cancelResult.errorDescription}`,
+      );
+    }
+
+    return settlementFailure(reason);
+  }
+
   // 6. AI-hold confirmation gate. Runs after the Payment Link exists
   // (created above, or joined via the idempotency branch) so a human has
   // something real to review/approve -- this is exactly the gap the old
   // short-circuit-before-any-Payment-Link-exists behavior left open. Bounded
   // by the same maxTimeoutSeconds as the payment wait above; a timeout here
   // is a clean settlementFailure, not a hang -- see awaitConfirmGate's doc
-  // comment for the full failure-mode reasoning.
+  // comment for the full failure-mode reasoning. awaitConfirmGate also
+  // directly understands a human decline sent while the hold is still
+  // unconfirmed (same channel, see ./confirm-gate.ts's declineConfirmGate) --
+  // the *other* decline window, after confirmation or for a plain "approve"
+  // recommendation with no hold at all, is covered below via declineWaitPromise.
   //
-  // resolutionPromise above is left running in the background if this
-  // branch returns early (hold never confirmed) -- awaitResolution exposes
-  // no cancellation handle, so its subscription/timer just rides out its
-  // own remaining window and self-cleans; this has no effect on the HTTP
-  // response, which has already been sent by then, and Redis's own
+  // resolutionPromise/declineWaitPromise above are left running in the
+  // background if this branch returns early (hold never confirmed) -- neither
+  // exposes a cancellation handle, so their subscriptions/timers just ride
+  // out their own remaining window and self-clean; this has no effect on the
+  // HTTP response, which has already been sent by then, and Redis's own
   // req:{requestId}:* TTLs clean up regardless.
   if (advisory.recommendation === "hold") {
     const gateResult = await awaitConfirmGate(deps.redis, requestId, paymentRequirements.maxTimeoutSeconds);
-    if (gateResult !== "confirmed") {
-      // Previously this returned without ever transitioning state or
-      // writing a reconciliation record -- the request was left stuck in
-      // "pending" indefinitely with a live Payment Link. Close that out as
-      // a genuine terminal "failed" outcome, same as every other failure
-      // path here.
-      const failedEvent = await transitionState(deps.redis, requestId, "failed", {
-        paymentLinkId,
-        reason: "ai-hold-timed-out",
-      });
-
-      await writeReconciliationRecord(deps.pg, {
-        ...baseRecord,
-        razorpayPaymentId: null,
-        resolvedAt: failedEvent.timestamp,
-        settledAt: null,
-        failedAt: failedEvent.timestamp,
-        finalOutcome: "failed",
-      });
-
-      // Best-effort: expire_by alone isn't enough here -- Razorpay enforces
-      // a minimum 15-minute Payment Link lifetime (see
-      // RAZORPAY_MIN_EXPIRY_SECONDS above), so a request with a short
-      // maxTimeoutSeconds like this one leaves the real Payment Link
-      // payable for up to ~14 more minutes after we've already marked it
-      // "failed" -- during which a late payment would be silently dropped
-      // by webhook-handler.ts's terminal-state check (money moves, nothing
-      // reconciles it). Actively cancelling closes that window now instead
-      // of waiting on expire_by. A cancel failure (e.g. the payer completed
-      // payment in the instant before this call -- a genuine, small race)
-      // is logged, not treated as a reason to change the response below.
-      const cancelResult = await cancelUpiPaymentLink(paymentLinkId);
-      if (!cancelResult.ok) {
-        console.error(
-          `[settlePayment] failed to cancel Payment Link ${paymentLinkId} after ai-hold-timed-out for requestId=${requestId}: ${cancelResult.errorDescription}`,
-        );
-      }
-
-      return settlementFailure("ai-hold-timed-out");
-    }
+    if (gateResult === "declined") return finalizeCancelledFailure("human-declined");
+    if (gateResult === "timed-out") return finalizeCancelledFailure("ai-hold-timed-out");
+    // gateResult === "confirmed" -- fall through to the payer-approval wait below.
   }
 
-  const resolution = await resolutionPromise;
+  // Races the normal payer-approval wait against a human decline arriving
+  // during THIS window (post-confirm, or a plain "approve" recommendation
+  // that never went through the gate above at all). declineWaitPromise's own
+  // "timed-out" outcome is deliberately neutralized to never resolve this
+  // race -- resolutionPromise's own timeout (-> "expired" below) is already
+  // the correct backstop for "nobody decided anything in time," and letting
+  // both timeouts race here would just be two clocks for the same ceiling
+  // with no behavioral difference, at the cost of a messier result shape.
+  const humanDeclinePromise: Promise<"human-declined"> = declineWaitPromise.then(
+    outcome => (outcome === "declined" ? "human-declined" : new Promise<never>(() => {})),
+  );
+
+  const resolution = await Promise.race([resolutionPromise, humanDeclinePromise]);
+
+  if (resolution === "human-declined") return finalizeCancelledFailure("human-declined");
 
   if (resolution.state === "approved") {
     const razorpayPaymentId = resolution.event?.meta.razorpayPaymentId ?? null;
@@ -794,6 +936,45 @@ export function createServer(deps: FacilitatorDeps): Express {
       // so both ways a human can decide to let a held request proceed stay
       // in lockstep on the same set+publish logic.
       await satisfyConfirmGate(deps.redis, requestId);
+      res.status(200).send("ok");
+    })();
+  });
+
+  // --- POST /internal/decline/:requestId ----------------------------------
+  //
+  // Symmetric to /internal/confirm-gate above, but the opposite decision: a
+  // human actively declining a request, available on ANY pending request
+  // (approve or hold recommendation) -- not a new gate that blocks Payment
+  // Link creation on every payment, and not exclusive to holds the way
+  // confirm-gate is. Same auth posture as /internal/confirm-gate
+  // (CONFIRM_GATE_SECRET), since it's the same class of action: any caller
+  // can unblock/redirect a live settlement.
+  //
+  // This route itself does no state-writing beyond publishing the decline
+  // signal (declineConfirmGate) -- the actual "failed" transition,
+  // reconciliation write, and Payment Link cancellation all happen inside
+  // the already-running settlePayment call that observes this signal (see
+  // awaitConfirmGate/awaitDeclineSignal/finalizeCancelledFailure above),
+  // exactly mirroring how satisfyConfirmGate never writes state directly
+  // either. Avoids two independent writers racing on the same terminal
+  // transition. "pending" state only exists while a settlePayment call is
+  // actually alive and waiting (no persisted "pending but orphaned" state in
+  // this design), so there's always something listening -- same assumption
+  // confirm-gate already relies on. A decline for a request that already
+  // resolved is a harmless no-op publish (nothing subscribed), same
+  // reasoning already documented on satisfyConfirmGate.
+  app.post("/internal/decline/:requestId", (req: Request, res: Response): void => {
+    void (async () => {
+      const secret = process.env.CONFIRM_GATE_SECRET;
+      if (secret) {
+        const authHeader = req.header("Authorization");
+        if (authHeader !== `Bearer ${secret}`) {
+          res.status(401).send("unauthorized");
+          return;
+        }
+      }
+      const requestId = String(req.params.requestId);
+      await declineConfirmGate(deps.redis, requestId);
       res.status(200).send("ok");
     })();
   });
