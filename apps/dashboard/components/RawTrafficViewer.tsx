@@ -20,14 +20,19 @@
  * all and will still show the plain "not observed" empty state below,
  * exactly as before this feature existed.
  *
- * `paymentResponseHeader` stays out of scope entirely and is always `null`:
- * it only exists after the deferred, up-to-180s settlement call that
- * app/api/simulate/route.ts hands to `after()` -- capturing it would mean
- * holding that route's response stream open for the same call this whole
- * design exists to avoid blocking on. When the other two headers ARE present
- * (a simulate run happened) but this one is still null, the block below
- * renders a distinct "pending" message rather than the generic empty state,
- * so it doesn't read as blank/broken.
+ * `paymentResponseHeader`: captured too, once available -- see
+ * app/api/simulate/route.ts's `runPaymentFlow` and
+ * lib/simulate-payment-response.ts for how it's persisted (Redis, keyed by
+ * razorpayPaymentId -- requestId is never knowable, even server-side) and
+ * app/page.tsx for the one-shot fetch that retrieves it once the request
+ * reaches a terminal state. Since that fetch only resolves after settlement
+ * concludes, `paymentResponsePending` is passed in explicitly (page.tsx
+ * knows `finalOutcome`, which this component doesn't) rather than derived
+ * from the other two headers' presence alone -- the earlier version of this
+ * component conflated "no header yet" with "still pending," which read as
+ * stuck once settlement had already failed (no PAYMENT-RESPONSE is ever
+ * sent by the merchant on a failed settlement) or once a successful one's
+ * value had aged out of Redis (10-minute TTL).
  */
 
 import { EmptyState } from "./EmptyState";
@@ -39,6 +44,8 @@ export interface RawTrafficViewerProps {
   paymentRequiredHeader: string | null;
   paymentSignatureHeader: string | null;
   paymentResponseHeader: string | null;
+  /** True only while settlement is still genuinely in flight (no terminal state yet) for a request that has captured headers -- see this file's top comment. */
+  paymentResponsePending: boolean;
 }
 
 type DecodeResult = { ok: true; json: unknown } | { ok: false; error: string };
@@ -113,13 +120,14 @@ function AcceptsSchemes({ header }: { header: string | null }) {
   );
 }
 
-export function RawTrafficViewer({ requestId, paymentRequiredHeader, paymentSignatureHeader, paymentResponseHeader }: RawTrafficViewerProps) {
+export function RawTrafficViewer({
+  requestId,
+  paymentRequiredHeader,
+  paymentSignatureHeader,
+  paymentResponseHeader,
+  paymentResponsePending,
+}: RawTrafficViewerProps) {
   const hasAnything = paymentRequiredHeader || paymentSignatureHeader || paymentResponseHeader;
-  // The other two headers only ever come from a simulate run that captured
-  // them (see this file's top comment) -- their presence, not `requestId` or
-  // anything else, is what distinguishes "a settlement is genuinely pending"
-  // from "nothing was ever captured for this request at all."
-  const awaitingSettlement = !paymentResponseHeader && Boolean(paymentRequiredHeader || paymentSignatureHeader);
 
   return (
     <Card>
@@ -138,10 +146,10 @@ export function RawTrafficViewer({ requestId, paymentRequiredHeader, paymentSign
             <AcceptsSchemes header={paymentRequiredHeader} />
             <HeaderBlock label="PAYMENT-REQUIRED" header={paymentRequiredHeader} />
             <HeaderBlock label="PAYMENT-SIGNATURE" header={paymentSignatureHeader} />
-            {awaitingSettlement ? (
+            {!paymentResponseHeader && paymentResponsePending ? (
               <div>
                 <div className="mb-1 text-xs font-medium text-muted-foreground">PAYMENT-RESPONSE</div>
-                <EmptyState>pending -- awaiting settlement (runs in the background, up to 180s; not captured here)</EmptyState>
+                <EmptyState>pending -- awaiting settlement (runs in the background, up to 180s)</EmptyState>
               </div>
             ) : (
               <HeaderBlock label="PAYMENT-RESPONSE" header={paymentResponseHeader} />

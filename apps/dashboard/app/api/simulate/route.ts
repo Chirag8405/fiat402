@@ -69,6 +69,16 @@
  * real deferred call, and the traced evidence that this is genuinely
  * deterministic (byte-identical, not just structurally equivalent) to what
  * that call will actually send.
+ *
+ * PAYMENT-RESPONSE is captured too, but on a different mechanism entirely --
+ * see ../../../lib/simulate-payment-response.ts's top comment for why
+ * sessionStorage (used for the other two headers, see AgentConsole.tsx/
+ * app/page.tsx) doesn't work here: `runPaymentFlow` runs inside `after()`,
+ * server-side, after this route's own HTTP response has already closed, so
+ * there's no browser context to write into. It's persisted to this app's own
+ * Redis instead, keyed by razorpayPaymentId (not requestId, which is never
+ * knowable here either) -- read back by
+ * app/api/simulate/payment-response/[razorpayPaymentId]/route.ts.
  */
 
 import { after } from "next/server";
@@ -77,6 +87,8 @@ import { wrapFetchWithPayment } from "@x402/fetch";
 import type { PaymentRequired } from "@x402/core/types";
 import { registerUpiScheme } from "@fiat402/x402-upi-client";
 import { captureSignatureHeader, type Persona } from "../../../lib/simulate-headers";
+import { paymentResponseKey, PAYMENT_RESPONSE_TTL_SECONDS } from "../../../lib/simulate-payment-response";
+import { redisClient } from "../../../lib/redis";
 
 export const runtime = "nodejs";
 // Sized for the worst case (a hold that rides out the full 180s
@@ -110,17 +122,43 @@ function isPersonaKey(value: unknown): value is keyof typeof PERSONAS {
   return typeof value === "string" && value in PERSONAS;
 }
 
+/** Minimal shape of the facilitator's SettlementResponseBody this file needs -- see apps/merchant/lib/x402-middleware.ts's own copy of the same pattern (never imports the type across an app boundary). */
+interface SettlementResponseBody {
+  success: boolean;
+  transaction: string;
+}
+
 /**
  * Runs the one call that can genuinely take up to `maxTimeoutSeconds`.
  * Deliberately has no return value the caller can observe -- by the time
  * this runs (inside `after()`), the HTTP response is already closed. Errors
  * are logged, never thrown: an unhandled rejection here has nowhere to go.
+ *
+ * On success, also captures PAYMENT-RESPONSE and persists it to Redis keyed
+ * by razorpayPaymentId -- see ../../../lib/simulate-payment-response.ts's
+ * top comment for why that's the right key here (requestId isn't knowable,
+ * even from inside this function) and why this can't reuse the
+ * sessionStorage mechanism the other two headers use. On a failed
+ * settlement the merchant never stamps this header at all (confirmed by
+ * reading x402-middleware.ts), so there's nothing to capture in that case --
+ * not a gap, just nothing to do.
  */
 async function runPaymentFlow(resourceUrl: string, client: x402Client, persona: string): Promise<void> {
   try {
     const fetchWithPayment = wrapFetchWithPayment(fetch, client);
     const response = await fetchWithPayment(resourceUrl);
     console.log(`[simulate:${persona}] payment flow completed with status ${response.status}`);
+
+    const paymentResponseHeader = response.headers.get("PAYMENT-RESPONSE");
+    if (!paymentResponseHeader) return;
+
+    try {
+      const decoded = JSON.parse(Buffer.from(paymentResponseHeader, "base64").toString("utf8")) as SettlementResponseBody;
+      if (!decoded.transaction) return;
+      await redisClient.set(paymentResponseKey(decoded.transaction), paymentResponseHeader, { ex: PAYMENT_RESPONSE_TTL_SECONDS });
+    } catch (err) {
+      console.error(`[simulate:${persona}] failed to persist PAYMENT-RESPONSE (non-fatal):`, err);
+    }
   } catch (err) {
     console.error(`[simulate:${persona}] payment flow failed:`, err);
   }

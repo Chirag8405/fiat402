@@ -40,7 +40,7 @@
  * the raw header fields that schema does not carry.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ConnectionIndicator, type ConnectionStatus } from "../components/ConnectionIndicator";
 import { AgentConsole, type CapturedHeaders } from "../components/AgentConsole";
 import { RawTrafficViewer } from "../components/RawTrafficViewer";
@@ -161,6 +161,62 @@ interface PostgresFallback {
 }
 
 /**
+ * sessionStorage persistence for `simulateHeaders` (PAYMENT-REQUIRED/
+ * PAYMENT-SIGNATURE captured during a live Simulate Agent run) -- session-
+ * scoped is correct here (no need to survive a closed tab), unlike
+ * trail/decision/reconciliation, which re-derive from Redis/Postgres on
+ * load rather than needing browser storage at all.
+ *
+ * The real `requestId` a captured run will produce isn't known at capture
+ * time (see components/AgentConsole.tsx's top comment / app/api/simulate/
+ * route.ts -- the facilitator mixes in a random UUID we never see), so this
+ * is a two-step write: onHeadersCaptured writes to a single fixed PENDING_KEY
+ * immediately; once the poll loop discovers the real requestId (or, on a
+ * fresh page load, whatever requestId is already current), the effect below
+ * promotes that pending entry onto the real per-request key. onRunStart
+ * clears the pending slot too, so an abandoned run's capture can't attach
+ * itself to some later, unrelated request.
+ *
+ * Accepted edge case, not engineered around per "keep this simple": if an
+ * unrelated request's requestId happens to surface before the current run's
+ * own request does, it would wrongly adopt the pending slot's headers. Same
+ * class of limitation this app already accepts elsewhere (only one "current"
+ * trail is ever tracked). No timestamp/expiry logic added to guard against
+ * it -- sessionStorage's own natural lifecycle (cleared when the tab closes)
+ * is the only lifecycle here.
+ */
+const SIMULATE_HEADERS_PENDING_KEY = "fiat402:simulate-headers:pending";
+
+function simulateHeadersKey(requestId: string): string {
+  return `fiat402:simulate-headers:${requestId}`;
+}
+
+function readSessionStorage(key: string): string | null {
+  try {
+    return sessionStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeSessionStorage(key: string, value: string): void {
+  try {
+    sessionStorage.setItem(key, value);
+  } catch {
+    // Private-mode / quota edge cases -- header display still works from
+    // React state this session, it just won't survive a refresh.
+  }
+}
+
+function removeSessionStorage(key: string): void {
+  try {
+    sessionStorage.removeItem(key);
+  } catch {
+    // Nothing to clean up if storage isn't reachable in the first place.
+  }
+}
+
+/**
  * "live" shows whatever `trail` currently holds (the normal, default mode);
  * "reset" is a purely local display-suppression mode -- the Reset button
  * flips into it, "Show last" flips back out. Neither state ever touches
@@ -183,6 +239,16 @@ export default function DashboardPage() {
   // unrelated trail changes (a real external payment arriving while these
   // are still showing), matching AgentConsole's own accepted lifecycle.
   const [simulateHeaders, setSimulateHeaders] = useState<CapturedHeaders | null>(null);
+  // { razorpayPaymentId, header } for the one PAYMENT-RESPONSE fetch attempt
+  // per razorpayPaymentId -- `header` is null both while unresolved and if
+  // the fetch came back empty (settlement failed, or the value already aged
+  // out of Redis); either way, no further attempts are made for the same id.
+  const [simulatePaymentResponse, setSimulatePaymentResponse] = useState<{ razorpayPaymentId: string; header: string | null } | null>(null);
+  // Guards the fetch-once effect below against StrictMode's double-invoke
+  // and re-renders that don't change razorpayPaymentId -- state alone isn't
+  // enough since the effect's own setSimulatePaymentResponse call is what
+  // would otherwise need to be in its own dependency array.
+  const attemptedPaymentResponseFor = useRef<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -237,6 +303,43 @@ export default function DashboardPage() {
 
   const events = trail?.events ?? [];
   const requestId = trail?.requestId ?? null;
+
+  // Promotes a pending simulate capture onto the real requestId once it's
+  // known, or hydrates from an already-promoted entry -- see
+  // SIMULATE_HEADERS_PENDING_KEY's doc comment above for the full design.
+  // Firing on every `requestId` change (including the first time it becomes
+  // non-null after a fresh page load) is what makes "hydrate on load if a
+  // match exists" and "promote once discovered during a live session" the
+  // same code path. When neither a keyed nor a pending entry exists, this
+  // explicitly clears `simulateHeaders` -- without that, a new unrelated
+  // request (a real payment) would keep showing a previous simulate run's
+  // stale headers indefinitely, since nothing else clears them except a new
+  // Run click.
+  useEffect(() => {
+    if (!requestId) {
+      setSimulateHeaders(null);
+      return;
+    }
+    const key = simulateHeadersKey(requestId);
+    let stored = readSessionStorage(key);
+    if (!stored) {
+      const pending = readSessionStorage(SIMULATE_HEADERS_PENDING_KEY);
+      if (pending) {
+        writeSessionStorage(key, pending);
+        removeSessionStorage(SIMULATE_HEADERS_PENDING_KEY);
+        stored = pending;
+      }
+    }
+    if (!stored) {
+      setSimulateHeaders(null);
+      return;
+    }
+    try {
+      setSimulateHeaders(JSON.parse(stored) as CapturedHeaders);
+    } catch {
+      setSimulateHeaders(null);
+    }
+  }, [requestId]);
   const current = events[events.length - 1] ?? null;
   const paymentLinkId = [...events].reverse().find(event => event.meta.paymentLinkId)?.meta.paymentLinkId ?? null;
   const liveRazorpayPaymentId = [...events].reverse().find(event => event.meta.razorpayPaymentId)?.meta.razorpayPaymentId ?? null;
@@ -330,6 +433,40 @@ export default function DashboardPage() {
     };
   }, [requestId, finalOutcome, needsPostgresFallback]);
 
+  // Fetches the PAYMENT-RESPONSE header app/api/simulate/route.ts's
+  // deferred `after()` call persisted to Redis (see
+  // lib/simulate-payment-response.ts) -- exactly once per razorpayPaymentId,
+  // triggered by reaching a terminal state, never polled: there's nothing to
+  // poll for, this either resolves once or never will (a failed settlement
+  // never had a PAYMENT-RESPONSE to capture in the first place, so this
+  // deliberately never even fires when liveRazorpayPaymentId is null).
+  useEffect(() => {
+    if (finalOutcome === null || !liveRazorpayPaymentId) return;
+    if (attemptedPaymentResponseFor.current === liveRazorpayPaymentId) return;
+    attemptedPaymentResponseFor.current = liveRazorpayPaymentId;
+
+    let cancelled = false;
+    const currentRazorpayPaymentId = liveRazorpayPaymentId;
+
+    (async () => {
+      let header: string | null = null;
+      try {
+        const res = await fetch(`/api/simulate/payment-response/${encodeURIComponent(currentRazorpayPaymentId)}`);
+        if (res.ok) {
+          const body = (await res.json()) as { paymentResponseHeader: string | null };
+          header = body.paymentResponseHeader;
+        }
+      } catch (err) {
+        console.warn(`page: /api/simulate/payment-response/${currentRazorpayPaymentId} request failed`, err);
+      }
+      if (!cancelled) setSimulatePaymentResponse({ razorpayPaymentId: currentRazorpayPaymentId, header });
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [finalOutcome, liveRazorpayPaymentId]);
+
   const { deterministic, ai } = hasLiveDecision ? liveDecision : (postgresFallback?.decision ?? liveDecision);
   const reconciliationExtras = postgresFallback?.extras ?? emptyReconciliationExtras();
   const razorpayPaymentId = liveRazorpayPaymentId ?? postgresFallback?.razorpayPaymentId ?? null;
@@ -352,6 +489,17 @@ export default function DashboardPage() {
   const displayFailureReason = showLive ? failureReason : null;
   const displayTimestamps = showLive ? deriveTimestamps(events) : emptyTimestamps();
   const displaySimulateHeaders = showLive ? simulateHeaders : null;
+  // Guarded on razorpayPaymentId matching, not just `showLive`: protects
+  // against a brief transitional render showing a previous request's
+  // already-fetched header before the effect above re-fires for a new one.
+  const displayPaymentResponseHeader =
+    showLive && simulatePaymentResponse?.razorpayPaymentId === liveRazorpayPaymentId ? simulatePaymentResponse.header : null;
+  // Still genuinely in flight (no terminal state yet) with request/signature
+  // already captured -- once finalOutcome is reached this becomes false,
+  // whether or not a PAYMENT-RESPONSE was ever retrieved, so
+  // RawTrafficViewer stops showing "pending" once settlement is genuinely
+  // over rather than forever.
+  const displayPaymentResponsePending = showLive && finalOutcome === null && Boolean(displaySimulateHeaders);
 
   // Reset/Show-last are gated on `trail` (the real data), not `displayMode`
   // -- "is there anything to act on" is a question about the underlying
@@ -389,7 +537,16 @@ export default function DashboardPage() {
         </div>
       </header>
 
-      <AgentConsole onRunStart={() => setSimulateHeaders(null)} onHeadersCaptured={setSimulateHeaders} />
+      <AgentConsole
+        onRunStart={() => {
+          setSimulateHeaders(null);
+          removeSessionStorage(SIMULATE_HEADERS_PENDING_KEY);
+        }}
+        onHeadersCaptured={headers => {
+          setSimulateHeaders(headers);
+          writeSessionStorage(SIMULATE_HEADERS_PENDING_KEY, JSON.stringify(headers));
+        }}
+      />
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <StateMachineViz events={events} forceIdle={!showLive} />
@@ -412,7 +569,8 @@ export default function DashboardPage() {
         requestId={displayRequestId}
         paymentRequiredHeader={displaySimulateHeaders?.paymentRequiredHeader ?? null}
         paymentSignatureHeader={displaySimulateHeaders?.paymentSignatureHeader ?? null}
-        paymentResponseHeader={null}
+        paymentResponseHeader={displayPaymentResponseHeader}
+        paymentResponsePending={displayPaymentResponsePending}
       />
     </main>
   );
