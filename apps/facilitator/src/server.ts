@@ -621,14 +621,27 @@ export async function settlePayment(
 
   // Shared terminal-failure bookkeeping for every path below that ends the
   // request without a successful settlement while a live Payment Link still
-  // exists: transition to "failed" (writing `reason` so the dashboard/
-  // reconciliation record can distinguish *why* -- ai-hold-timed-out, a
-  // plain payer timeout, or a human decline, never a collapsed generic
-  // "expired"), write the audit record, and best-effort cancel the Payment
-  // Link. Extracted because ai-hold-timed-out and both human-decline windows
-  // below all need exactly this, byte-for-byte -- previously duplicated
-  // ai-hold-timed-out's version verbatim would have been the second copy.
-  async function finalizeCancelledFailure(reason: string): Promise<SettlementResponseBody> {
+  // exists: publish the payer-outcome intermediate state (never skip
+  // straight from "pending" to "failed" -- the rail's whole point is
+  // showing that step), then transition to "failed" (writing `reason` so
+  // the dashboard/reconciliation record can distinguish *why* --
+  // ai-hold-timed-out, a plain payer timeout, or a human decline, never a
+  // collapsed generic "expired"), write the audit record, and best-effort
+  // cancel the Payment Link. Extracted because ai-hold-timed-out and both
+  // human-decline windows below all need exactly this, byte-for-byte --
+  // previously duplicated ai-hold-timed-out's version verbatim would have
+  // been the second copy.
+  //
+  // The two transitionState calls below are sequential awaits within this
+  // same function -- one writer, not two independent publishers racing (see
+  // webhook-handler.ts's "approved" vs this file's "settled", the actual
+  // race the dashboard's events-route fix was built around). The second
+  // call's redis.set/publish/lpush/ltrim sequence cannot begin until the
+  // first one's has fully resolved, so there is no possibility of the
+  // "failed" event's LPUSH landing before the intermediate's.
+  async function finalizeCancelledFailure(intermediateState: "declined" | "expired", reason: string): Promise<SettlementResponseBody> {
+    await transitionState(deps.redis, requestId, intermediateState, { paymentLinkId, reason });
+
     const failedEvent = await transitionState(deps.redis, requestId, "failed", {
       paymentLinkId,
       reason,
@@ -683,8 +696,8 @@ export async function settlePayment(
   // req:{requestId}:* TTLs clean up regardless.
   if (advisory.recommendation === "hold") {
     const gateResult = await awaitConfirmGate(deps.redis, requestId, paymentRequirements.maxTimeoutSeconds);
-    if (gateResult === "declined") return finalizeCancelledFailure("human-declined");
-    if (gateResult === "timed-out") return finalizeCancelledFailure("ai-hold-timed-out");
+    if (gateResult === "declined") return finalizeCancelledFailure("declined", "human-declined");
+    if (gateResult === "timed-out") return finalizeCancelledFailure("expired", "ai-hold-timed-out");
     // gateResult === "confirmed" -- fall through to the payer-approval wait below.
   }
 
@@ -702,7 +715,7 @@ export async function settlePayment(
 
   const resolution = await Promise.race([resolutionPromise, humanDeclinePromise]);
 
-  if (resolution === "human-declined") return finalizeCancelledFailure("human-declined");
+  if (resolution === "human-declined") return finalizeCancelledFailure("declined", "human-declined");
 
   if (resolution.state === "approved") {
     const razorpayPaymentId = resolution.event?.meta.razorpayPaymentId ?? null;
@@ -729,7 +742,21 @@ export async function settlePayment(
   }
 
   // resolution.state is "declined" or "expired" here -- both mean "return 402" to the caller.
+  // In practice this is always "expired": awaitResolution (state-machine.ts)
+  // never itself resolves with "declined" (that value is intentionally
+  // ignored there, per its own doc comment, to support the UPI retry case)
+  // -- the "payment-declined" half of this ternary is unreachable today.
   const errorReason = resolution.state === "expired" ? "timeout" : "payment-declined";
+
+  // Publish the payer-outcome step before the terminal one: awaitResolution's
+  // own "expired" outcome is never itself published (see that function's doc
+  // comment) -- without this, the rail jumped straight from "pending" to
+  // "failed". Sequential await within this same function, same one-writer
+  // reasoning as finalizeCancelledFailure above -- not the LPUSH-ordering
+  // race between two independent publishers that the events-route fix
+  // addressed.
+  await transitionState(deps.redis, requestId, "expired", { paymentLinkId, reason: errorReason });
+
   const failedEvent = await transitionState(deps.redis, requestId, "failed", {
     paymentLinkId,
     reason: errorReason,

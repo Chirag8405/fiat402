@@ -56,11 +56,20 @@ class FakeRedis implements FacilitatorRedisClient {
     return this.hashes.get(key) ?? null;
   }
 
+  /** Every publish this fake has seen, in order -- lets tests assert on the full transition sequence, not just the final Redis state. */
+  publishedMessages: Array<{ channel: string; message: string }> = [];
+
   async publish(channel: string, message: string): Promise<number> {
+    this.publishedMessages.push({ channel, message });
     const listeners = this.channelListeners.get(channel);
     if (!listeners) return 0;
     for (const listener of listeners) listener(message, channel);
     return listeners.size;
+  }
+
+  /** Convenience for tests: every FiatEvent this fake has published on EVENTS_CHANNEL, in order. */
+  publishedEvents(): FiatEvent[] {
+    return this.publishedMessages.filter(p => p.channel === EVENTS_CHANNEL).map(p => JSON.parse(p.message) as FiatEvent);
   }
 
   async lpush(key: string, ...values: string[]): Promise<number> {
@@ -313,6 +322,11 @@ describe("POST /settle — AI hold / confirm-gate", () => {
     expect(await redis.get(`req:${requestId}:state`)).toBe("failed");
     expect(pg.calls).toHaveLength(1);
 
+    // Regression: the rail must show a payer-outcome step ("expired") before
+    // the terminal "failed" -- previously this jumped straight pending -> failed.
+    const states = redis.publishedEvents().filter(e => e.requestId === requestId).map(e => e.state);
+    expect(states).toEqual(["pending", "expired", "failed"]);
+
     // Regression: the Payment Link must be actively cancelled, not left to
     // expire on its own -- expire_by alone leaves it payable for up to ~14
     // more minutes (Razorpay's 15-minute floor) after this request is
@@ -456,6 +470,11 @@ describe("POST /settle — human decline", () => {
     expect(await redis.get(`req:${requestId}:state`)).toBe("failed");
     expect(pg.calls).toHaveLength(1);
     expect(cancelUpiPaymentLinkMock).toHaveBeenCalledWith("plink_decline_hold");
+
+    // Regression: the rail must show "declined" before "failed", not jump
+    // straight from pending.
+    const states = redis.publishedEvents().filter(e => e.requestId === requestId).map(e => e.state);
+    expect(states).toEqual(["pending", "declined", "failed"]);
   });
 
   it("unblocks a plain payer-approval wait via /internal/decline, for a request that was never a hold", async () => {
@@ -484,6 +503,10 @@ describe("POST /settle — human decline", () => {
     expect(body).toMatchObject({ success: false, errorReason: "human-declined", transaction: "" });
     expect(await redis.get(`req:${requestId}:state`)).toBe("failed");
     expect(cancelUpiPaymentLinkMock).toHaveBeenCalledWith("plink_decline_approve");
+
+    // Regression: same payer-outcome-before-terminal requirement as the hold case.
+    const states = redis.publishedEvents().filter(e => e.requestId === requestId).map(e => e.state);
+    expect(states).toEqual(["pending", "declined", "failed"]);
   });
 });
 
@@ -503,6 +526,13 @@ describe("POST /settle — timeout", () => {
     expect(body).toEqual({ success: false, errorReason: "timeout", transaction: "", network: "upi:in" });
     expect(await redis.get(`req:${requestId}:state`)).toBe("failed");
     expect(pg.calls).toHaveLength(1);
+
+    // Regression: a plain payer timeout (nobody ever paid) must show
+    // "expired" before "failed" -- awaitResolution's own "expired" outcome
+    // is never itself published, so without this the rail jumped straight
+    // pending -> failed.
+    const states = redis.publishedEvents().filter(e => e.requestId === requestId).map(e => e.state);
+    expect(states).toEqual(["pending", "expired", "failed"]);
   }, 10000);
 });
 
