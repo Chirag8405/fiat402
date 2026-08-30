@@ -150,6 +150,7 @@ function emptyReconciliationExtras(): ReconciliationExtras {
 interface PostgresFallback {
   decision: Decision;
   extras: ReconciliationExtras;
+  razorpayPaymentId: string | null;
 }
 
 export default function DashboardPage() {
@@ -220,7 +221,7 @@ export default function DashboardPage() {
   const requestId = trail?.requestId ?? null;
   const current = events[events.length - 1] ?? null;
   const paymentLinkId = [...events].reverse().find(event => event.meta.paymentLinkId)?.meta.paymentLinkId ?? null;
-  const razorpayPaymentId = [...events].reverse().find(event => event.meta.razorpayPaymentId)?.meta.razorpayPaymentId ?? null;
+  const liveRazorpayPaymentId = [...events].reverse().find(event => event.meta.razorpayPaymentId)?.meta.razorpayPaymentId ?? null;
   const finalOutcome = current?.state === "settled" || current?.state === "failed" ? current.state : null;
   // Only derivable from the live trail -- see ReconciliationRecord.tsx's
   // `failureReason` doc comment for why the Postgres fallback can't supply
@@ -228,18 +229,37 @@ export default function DashboardPage() {
   const failureReason = current?.state === "failed" ? (current.meta.reason ?? null) : null;
   const liveDecision = deriveDecision(events);
   const hasLiveDecision = liveDecision.deterministic !== null || liveDecision.ai !== null;
+  // txnRef/amountPaise/payTo have NO live source at all -- no FiatEvent
+  // field ever carries them (see ReconciliationRecord.tsx's top-of-file
+  // comment) -- so this is effectively always true once a request is
+  // terminal, regardless of whether decision data happens to be present.
+  // razorpayPaymentId CAN be live (the settled/approved event's own
+  // meta.razorpayPaymentId), so it's checked for real rather than assumed
+  // missing. Deliberately independent of `hasLiveDecision`: that gate was
+  // previously reused for this fetch too, which meant the extras backfill
+  // only ever fired on the rare request with NO live decision data --
+  // in practice essentially never, so txnRef/amountPaise/payTo/
+  // razorpayPaymentId almost always showed "not available" even though the
+  // reconciliation row existed in Postgres the whole time.
+  const missingExtras = liveRazorpayPaymentId === null;
 
   // Falls back to Postgres (via the facilitator's GET /reconciliation/:requestId,
   // proxied at /api/reconciliation/:requestId) once a request has reached a
-  // terminal outcome AND the live event stream has no decision-layer data for
-  // it -- prefer live data whenever any of it exists. This closes the gap
-  // where the "pending" event carrying aiRecommendation/aiSemanticMatch/etc.
-  // has scrolled out of fiat402:events:recent's bounded 200-entry window (or
-  // the tab was reopened after it already had), even though a full
-  // reconciliation record was durably written to Postgres once the request
-  // settled/failed -- see ReconciliationRecord.tsx's top-of-file comment.
+  // terminal outcome AND either the live event stream has no decision-layer
+  // data for it, or the extras fields above are missing live -- these are two
+  // independent reasons to fetch the same record, not one combined gate:
+  // live decision data is still preferred/used as-is whenever it exists (see
+  // the merge below), this fetch just also needs to run for the extras' own
+  // sake even when decision data is fine. Closes the gap where the "pending"
+  // event carrying aiRecommendation/aiSemanticMatch/etc. has scrolled out of
+  // fiat402:events:recent's bounded 200-entry window (or the tab was
+  // reopened after it already had), even though a full reconciliation record
+  // was durably written to Postgres once the request settled/failed -- see
+  // ReconciliationRecord.tsx's top-of-file comment.
+  const needsPostgresFallback = Boolean(requestId) && finalOutcome !== null && (!hasLiveDecision || missingExtras);
+
   useEffect(() => {
-    if (!requestId || !finalOutcome || hasLiveDecision) {
+    if (!requestId || !finalOutcome || !needsPostgresFallback) {
       setPostgresFallback(null);
       return;
     }
@@ -267,6 +287,7 @@ export default function DashboardPage() {
               setPostgresFallback({
                 decision: decisionFromReconciliationRecord(record),
                 extras: { txnRef: record.txnRef, amountPaise: record.amountPaise, payTo: record.payTo },
+                razorpayPaymentId: record.razorpayPaymentId,
               });
             }
             return;
@@ -289,10 +310,11 @@ export default function DashboardPage() {
     return () => {
       cancelled = true;
     };
-  }, [requestId, finalOutcome, hasLiveDecision]);
+  }, [requestId, finalOutcome, needsPostgresFallback]);
 
   const { deterministic, ai } = hasLiveDecision ? liveDecision : (postgresFallback?.decision ?? liveDecision);
   const reconciliationExtras = postgresFallback?.extras ?? emptyReconciliationExtras();
+  const razorpayPaymentId = liveRazorpayPaymentId ?? postgresFallback?.razorpayPaymentId ?? null;
 
   return (
     <main className="mx-auto flex min-h-screen max-w-6xl flex-col gap-6 p-6">
