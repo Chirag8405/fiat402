@@ -89,6 +89,7 @@ import { registerUpiScheme } from "@fiat402/x402-upi-client";
 import { captureSignatureHeader, type Persona } from "../../../lib/simulate-headers";
 import { paymentResponseKey, PAYMENT_RESPONSE_TTL_SECONDS } from "../../../lib/simulate-payment-response";
 import { redisClient } from "../../../lib/redis";
+import { checkAndRecordSimulateTrigger } from "../../../lib/simulate-rate-limit";
 
 export const runtime = "nodejs";
 // Sized for the worst case (a hold that rides out the full 180s
@@ -165,6 +166,14 @@ async function runPaymentFlow(resourceUrl: string, client: x402Client, persona: 
 }
 
 export async function POST(request: Request): Promise<Response> {
+  // Checked first, ahead of body parsing/any real work -- an independent
+  // safety net on top of /console's passcode gate, see
+  // lib/simulate-rate-limit.ts's top comment.
+  const rateLimit = await checkAndRecordSimulateTrigger();
+  if (!rateLimit.allowed) {
+    return Response.json({ error: "demo limit reached, try again later" }, { status: 429 });
+  }
+
   let body: unknown;
   try {
     body = await request.json();

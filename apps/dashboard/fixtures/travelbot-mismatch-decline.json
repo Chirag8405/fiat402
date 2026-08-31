@@ -1,0 +1,70 @@
+{
+  "requestId": "req_ccb1782484ea4051a1d9b8e5dc937414",
+  "persona": "travelbot",
+  "events": [
+    {
+      "requestId": "req_ccb1782484ea4051a1d9b8e5dc937414",
+      "state": "pending",
+      "previousState": null,
+      "timestamp": "2026-08-31T05:50:21.246Z",
+      "meta": {
+        "paymentLinkId": "plink_TWGe8K9poSJ4GQ",
+        "razorpayPaymentId": null,
+        "reason": null
+      },
+      "aiRecommendation": "hold",
+      "aiSemanticMatch": false,
+      "aiJustification": "The request is for booking a flight, but the merchant sells premium data; mismatch requires human review.",
+      "aiHumanSummary": "The request is for booking a flight, but the merchant sells premium data; mismatch requires human review.",
+      "aiReasoning": "Agent task context (flight booking) does not align with merchant description (premium data access).",
+      "aiProvider": "groq",
+      "deterministicDecision": "allowed"
+    },
+    {
+      "requestId": "req_ccb1782484ea4051a1d9b8e5dc937414",
+      "state": "declined",
+      "previousState": "pending",
+      "timestamp": "2026-08-31T05:50:39.838Z",
+      "meta": {
+        "paymentLinkId": "plink_TWGe8K9poSJ4GQ",
+        "razorpayPaymentId": null,
+        "reason": "human-declined"
+      }
+    },
+    {
+      "requestId": "req_ccb1782484ea4051a1d9b8e5dc937414",
+      "state": "failed",
+      "previousState": "declined",
+      "timestamp": "2026-08-31T05:50:41.003Z",
+      "meta": {
+        "paymentLinkId": "plink_TWGe8K9poSJ4GQ",
+        "razorpayPaymentId": null,
+        "reason": "human-declined"
+      }
+    }
+  ],
+  "reconciliation": {
+    "requestId": "req_ccb1782484ea4051a1d9b8e5dc937414",
+    "txnRef": null,
+    "razorpayPaymentId": null,
+    "paymentLinkId": "plink_TWGe8K9poSJ4GQ",
+    "amountPaise": "100",
+    "payTo": "merchant@upi",
+    "deterministicDecision": true,
+    "deterministicReason": null,
+    "aiRecommendation": "hold",
+    "aiJustification": "The request is for booking a flight, but the merchant sells premium data; mismatch requires human review.",
+    "aiProvider": "groq",
+    "createdAt": "2026-08-31T05:50:22.489Z",
+    "pendingAt": "2026-08-31T05:50:21.246Z",
+    "resolvedAt": "2026-08-31T05:50:41.003Z",
+    "settledAt": null,
+    "failedAt": "2026-08-31T05:50:41.003Z",
+    "finalOutcome": "failed"
+  },
+  "headers": {
+    "paymentRequiredHeader": "eyJ4NDAyVmVyc2lvbiI6MiwiZXJyb3IiOiJQQVlNRU5ULVNJR05BVFVSRSBoZWFkZXIgaXMgcmVxdWlyZWQiLCJyZXNvdXJjZSI6eyJ1cmwiOiIvYXBpL3ByZW1pdW0tZGF0YSIsImRlc2NyaXB0aW9uIjoiUHJlbWl1bSBkYXRhIGFjY2VzcyIsIm1pbWVUeXBlIjoiYXBwbGljYXRpb24vanNvbiIsInNlcnZpY2VOYW1lIjoiZmlhdDQwMiBtZXJjaGFudCBkZW1vIn0sImFjY2VwdHMiOlt7InNjaGVtZSI6InVwaSIsIm5ldHdvcmsiOiJ1cGk6aW4iLCJhbW91bnQiOiIxMDAiLCJhc3NldCI6IklOUiIsInBheVRvIjoibWVyY2hhbnRAdXBpIiwibWF4VGltZW91dFNlY29uZHMiOjE4MCwiZXh0cmEiOnsibWVyY2hhbnROYW1lIjoiZmlhdDQwMiBEZW1vIE1lcmNoYW50IiwiZGVzY3JpcHRpb24iOiJQcmVtaXVtIGRhdGEgYWNjZXNzIn19XSwiZXh0ZW5zaW9ucyI6e319",
+    "paymentSignatureHeader": "eyJ4NDAyVmVyc2lvbiI6MiwicGF5bG9hZCI6e30sImV4dGVuc2lvbnMiOnsiYWdlbnRNZXRhZGF0YSI6eyJ0YXNrQ29udGV4dCI6IkJvb2tpbmcgYSBvbmUtd2F5IGZsaWdodCB0byBHb2EifX0sInJlc291cmNlIjp7InVybCI6Ii9hcGkvcHJlbWl1bS1kYXRhIiwiZGVzY3JpcHRpb24iOiJQcmVtaXVtIGRhdGEgYWNjZXNzIiwibWltZVR5cGUiOiJhcHBsaWNhdGlvbi9qc29uIiwic2VydmljZU5hbWUiOiJmaWF0NDAyIG1lcmNoYW50IGRlbW8ifSwiYWNjZXB0ZWQiOnsic2NoZW1lIjoidXBpIiwibmV0d29yayI6InVwaTppbiIsImFtb3VudCI6IjEwMCIsImFzc2V0IjoiSU5SIiwicGF5VG8iOiJtZXJjaGFudEB1cGkiLCJtYXhUaW1lb3V0U2Vjb25kcyI6MTgwLCJleHRyYSI6eyJtZXJjaGFudE5hbWUiOiJmaWF0NDAyIERlbW8gTWVyY2hhbnQiLCJkZXNjcmlwdGlvbiI6IlByZW1pdW0gZGF0YSBhY2Nlc3MifX19",
+    "paymentResponseHeader": null
+  }
+}
