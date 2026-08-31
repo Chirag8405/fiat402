@@ -41,16 +41,16 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { ConnectionIndicator, type ConnectionStatus } from "../components/ConnectionIndicator";
-import { AgentConsole, type CapturedHeaders } from "../components/AgentConsole";
-import { RawTrafficViewer } from "../components/RawTrafficViewer";
-import { UpiCollectCard } from "../components/UpiCollectCard";
-import { StateMachineViz } from "../components/StateMachineViz";
-import { DecisionPanel, type DeterministicDecision, type AiAdvisory } from "../components/DecisionPanel";
-import { ReconciliationRecord, type ObservedTimestamps, type ReconciliationExtras } from "../components/ReconciliationRecord";
-import { isFiatEventShape, isKnownState, type FiatEvent } from "../lib/events";
-import { reconstructTrail, trailsEqual, type RequestTrail } from "../lib/trail";
-import type { ReconciliationRecordDto } from "../lib/types";
+import { ConnectionIndicator, type ConnectionStatus } from "../../components/ConnectionIndicator";
+import { AgentConsole, type CapturedHeaders } from "../../components/AgentConsole";
+import { RawTrafficViewer } from "../../components/RawTrafficViewer";
+import { UpiCollectCard } from "../../components/UpiCollectCard";
+import { StateMachineViz } from "../../components/StateMachineViz";
+import { DecisionPanel, type DeterministicDecision, type AiAdvisory } from "../../components/DecisionPanel";
+import { ReconciliationRecord, type ObservedTimestamps, type ReconciliationExtras } from "../../components/ReconciliationRecord";
+import { isFiatEventShape, isKnownState, type FiatEvent } from "../../lib/events";
+import { reconstructTrail, trailsEqual, type RequestTrail } from "../../lib/trail";
+import type { ReconciliationRecordDto } from "../../lib/types";
 
 const POLL_INTERVAL_MS = 2500;
 
