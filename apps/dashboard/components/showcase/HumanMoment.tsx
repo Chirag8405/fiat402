@@ -72,22 +72,31 @@ export function HumanMoment() {
   }, []);
 
   return (
-    <section ref={sectionRef} className="relative flex min-h-screen flex-col items-center justify-center gap-10 px-6">
-      <p className="font-mono text-xs uppercase tracking-widest text-muted-foreground">TravelBot · flagged for review</p>
-
-      <p className="max-w-2xl text-center text-xl leading-relaxed text-foreground sm:text-2xl">
-        <span ref={messageRef} />
-        <span className="blinking-cursor" aria-hidden="true">
-          |
-        </span>
-      </p>
-
-      <div className="flex items-center gap-3">
-        <div ref={confirmRef} className="rounded-full bg-primary px-6 py-2 text-sm font-semibold text-primary-foreground shadow-[0_0_0_4px] shadow-primary/15">
-          Confirm
+    <section ref={sectionRef} className="relative flex min-h-screen flex-col items-center justify-center px-6">
+      {/* Composition redesign: one bordered card (header/body/footer bands)
+          instead of three floating elements -- refs/timeline unchanged. */}
+      <div className="w-full max-w-2xl overflow-hidden rounded-xl border border-border bg-card shadow-lg">
+        <div className="flex items-center justify-between gap-3 border-b border-border px-5 py-3.5">
+          <span className="text-sm font-medium text-foreground">TravelBot</span>
+          <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">flagged for review</span>
         </div>
-        <div ref={declineRef} className="rounded-full border border-danger/40 bg-danger/10 px-6 py-2 text-sm font-medium text-danger">
-          Declined
+
+        <div className="px-5 py-8 sm:py-10">
+          <p className="text-center text-xl leading-relaxed text-foreground sm:text-2xl">
+            <span ref={messageRef} />
+            <span className="blinking-cursor" aria-hidden="true">
+              |
+            </span>
+          </p>
+        </div>
+
+        <div className="flex items-center justify-center gap-3 border-t border-border px-5 py-5">
+          <div ref={confirmRef} className="rounded-full bg-primary px-6 py-2 text-sm font-semibold text-primary-foreground shadow-[0_0_0_4px] shadow-primary/15">
+            Confirm
+          </div>
+          <div ref={declineRef} className="rounded-full border border-danger/40 bg-danger/10 px-6 py-2 text-sm font-medium text-danger">
+            Declined
+          </div>
         </div>
       </div>
     </section>

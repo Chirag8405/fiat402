@@ -31,13 +31,28 @@
  * Static sample markup only (illustrative PaymentRequired-shaped JSON and a
  * sample UPI intent string) -- deliberately not wired to any live state or
  * /api/* route, per this page's zero-real-backend-calls rule (see
- * app/page.tsx's top comment).
+ * app/page.tsx's top comment). Known pre-existing gap, unrelated to this
+ * composition pass: this sample is hardcoded, not fixture-derived, unlike
+ * ColdOpen.tsx's JSON panel (which decodes a real captured fixture) --
+ * worth fixing in a future pass, deliberately not touched here so this
+ * doesn't end up with a second, differently-fake data source.
+ *
+ * Composition redesign: two-column layout (dense left framing copy + a
+ * bordered right card), per the "no section shows a single line of text
+ * centered alone" principle. The crossfade animation itself (refs, GSAP
+ * timeline, the mobile-safe measured-width travel math) is unchanged --
+ * only the surrounding markup/chrome around it changed. trackRef's
+ * container is now the right column instead of the full section width;
+ * since the travel-distance math already measures trackRef.clientWidth
+ * live (not a hardcoded viewport-relative guess), narrowing it needs zero
+ * formula changes.
  */
 
 import { useEffect, useRef } from "react";
 import gsap from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
 import { QRCodeSVG } from "qrcode.react";
+import { WindowChrome } from "./WindowChrome";
 
 const SAMPLE_PAYMENT_REQUIRED = `{
   "x402Version": 2,
@@ -121,26 +136,54 @@ export function Bridge() {
   }, []);
 
   return (
-    <section ref={sectionRef} className="relative min-h-screen overflow-hidden">
-      <div className="pointer-events-none absolute left-1/2 top-10 -translate-x-1/2 text-center">
-        <p className="text-xs uppercase tracking-widest text-muted-foreground">raw protocol → rupee-settled payment</p>
-      </div>
+    <section ref={sectionRef} className="relative flex min-h-screen items-center overflow-hidden px-6 py-24">
+      <div className="mx-auto grid w-full max-w-6xl grid-cols-1 items-center gap-10 lg:grid-cols-2 lg:gap-16">
+        {/* Left: framing copy, dense stack. */}
+        <div className="flex flex-col items-start gap-4">
+          <p className="text-xs uppercase tracking-widest text-muted-foreground">raw protocol → rupee-settled payment</p>
+          <h2 className="text-3xl font-semibold leading-tight text-foreground sm:text-4xl">The Bridge</h2>
+          <p className="max-w-md text-sm leading-relaxed text-muted-foreground sm:text-base">
+            One HTTP 402 response. One scan. The agent never leaves the request.
+          </p>
+        </div>
 
-      <div ref={trackRef} className="relative h-screen">
-        <div ref={wrapperRef} className="absolute top-1/2 w-64 -translate-y-1/2 sm:w-80">
-          <div ref={terminalRef} className="absolute inset-0 rounded-lg border border-border bg-card p-4 shadow-lg">
-            <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-muted-foreground">PAYMENT-REQUIRED</p>
-            <pre className="overflow-x-auto font-mono text-[11px] leading-relaxed text-foreground">{SAMPLE_PAYMENT_REQUIRED}</pre>
+        {/* Right: bordered card -- chrome strip, crossfading media area, caption band. */}
+        <div className="overflow-hidden rounded-xl border border-border bg-card shadow-lg">
+          <WindowChrome label="PAYMENT-REQUIRED → UPI" />
+
+          <div ref={trackRef} className="relative h-72 overflow-hidden sm:h-80">
+            {/* wrapperRef spans the FULL track height (inset-y-0), not a
+                shrink-to-fit box vertically centered via translate -- with
+                only `top-1/2 -translate-y-1/2` (no explicit height),
+                terminalRef/qrRef's `inset-0` had no definite height to fill
+                and their auto-height content spilled past trackRef's
+                boundary into the caption band below. Giving wrapperRef a
+                real height lets inset-0 (and the flex-centered content
+                inside each pane) resolve correctly and stay clipped by
+                trackRef's own overflow-hidden. */}
+            <div ref={wrapperRef} className="absolute inset-y-0 w-56 sm:w-64">
+              <div ref={terminalRef} className="absolute inset-0 flex flex-col justify-center p-4">
+                <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-muted-foreground">PAYMENT-REQUIRED</p>
+                <pre className="overflow-x-auto font-mono text-[11px] leading-relaxed text-foreground">{SAMPLE_PAYMENT_REQUIRED}</pre>
+              </div>
+
+              <div ref={qrRef} className="absolute inset-0 flex flex-col items-center justify-center gap-3 p-4">
+                <div className="rounded-lg bg-white p-3">
+                  <QRCodeSVG value={SAMPLE_UPI_INTENT} size={144} />
+                </div>
+                <div className="text-center">
+                  <p className="text-lg font-semibold text-foreground">₹100.00</p>
+                  <code className="text-xs text-muted-foreground">merchant@upi</code>
+                </div>
+              </div>
+            </div>
           </div>
 
-          <div ref={qrRef} className="absolute inset-0 flex flex-col items-center gap-3 rounded-lg border border-border bg-card p-4 shadow-lg">
-            <div className="rounded-lg bg-white p-3">
-              <QRCodeSVG value={SAMPLE_UPI_INTENT} size={144} />
-            </div>
-            <div className="text-center">
-              <p className="text-lg font-semibold text-foreground">₹100.00</p>
-              <code className="text-xs text-muted-foreground">merchant@upi</code>
-            </div>
+          <div className="flex items-center justify-between gap-3 border-t border-border px-4 py-3">
+            <code className="min-w-0 truncate font-mono text-[11px] text-muted-foreground">{SAMPLE_UPI_INTENT}</code>
+            <span className="shrink-0 rounded-full border border-border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+              UPI Intent
+            </span>
           </div>
         </div>
       </div>

@@ -1,56 +1,55 @@
 "use client";
 
 /**
- * Section 2 -- "the old way": pain points staged one at a time as the user
- * scrolls, each crossed out as the next appears. One pinned section, one
- * scrubbed gsap.timeline (scrub: 1, tied to scroll position -- not a
- * trigger-once reveal), same pattern as components/showcase/Bridge.tsx's
- * bridge sequence.
+ * Section 2 -- "the old way": all three pain points live inside one
+ * bordered row-list (composition redesign -- no more one-word-at-a-time
+ * floating text). One pinned section, one scrubbed gsap timeline (scrub:
+ * true, same as before) drives which row is "active" as the user scrolls,
+ * reusing the SAME progress math the old floating-word version used
+ * (slice = 1 / PAIN_POINTS.length, start = index * slice was already "which
+ * third of this section's scroll range belongs to which pain point") --
+ * just applied to a row highlight instead of a word's opacity. Same
+ * ScrollTrigger config (pin, start/end -- pin distance unchanged), same
+ * scrub-driven onUpdate-imperative-ref idiom HumanMoment.tsx's typewriter
+ * uses, no React state added.
  */
 
 import { useEffect, useRef } from "react";
 import gsap from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
 
-const PAIN_POINTS = ["KYC verification", "API key provisioning", "Recurring subscriptions"];
+const PAIN_POINTS = [
+  { label: "KYC verification", description: "Identity checks before an agent can transact." },
+  { label: "API key provisioning", description: "Manual credential exchange, per integration." },
+  { label: "Recurring subscriptions", description: "Standing authorization instead of per-request consent." },
+];
 
 export function OldWay() {
   const sectionRef = useRef<HTMLElement | null>(null);
-  const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
-  const strikeRefs = useRef<(HTMLSpanElement | null)[]>([]);
+  const rowRefs = useRef<(HTMLDivElement | null)[]>([]);
 
   useEffect(() => {
     if (!sectionRef.current) return;
 
     const ctx = gsap.context(() => {
-      const timeline = gsap.timeline({
-        scrollTrigger: {
-          trigger: sectionRef.current,
-          start: "top top",
-          end: "+=140%",
-          pin: true,
-          // scrub: true (not a numeric value) -- avoids stacking GSAP's own
-          // catch-up smoothing on top of Lenis's already-eased scroll
-          // position, see HumanMoment.tsx's top comment for the full reasoning.
-          scrub: true,
+      ScrollTrigger.create({
+        trigger: sectionRef.current,
+        start: "top top",
+        end: "+=140%",
+        pin: true,
+        // scrub: true (not a numeric value) -- avoids stacking GSAP's own
+        // catch-up smoothing on top of Lenis's already-eased scroll
+        // position, see HumanMoment.tsx's top comment for the full reasoning.
+        scrub: true,
+        onUpdate: self => {
+          const activeIndex = Math.min(Math.floor(self.progress * PAIN_POINTS.length), PAIN_POINTS.length - 1);
+          rowRefs.current.forEach((row, index) => {
+            if (!row) return;
+            row.classList.toggle("bg-muted", index === activeIndex);
+            const label = row.querySelector<HTMLElement>("[data-row-label]");
+            if (label) label.classList.toggle("text-primary", index === activeIndex);
+          });
         },
-      });
-
-      const slice = 1 / PAIN_POINTS.length;
-      PAIN_POINTS.forEach((_, index) => {
-        const start = index * slice;
-        const item = itemRefs.current[index];
-        const strike = strikeRefs.current[index];
-        if (!item || !strike) return;
-
-        timeline.fromTo(item, { autoAlpha: 0, y: 16 }, { autoAlpha: 1, y: 0, duration: slice * 0.35, ease: "none" }, start);
-
-        // Crossed out once the NEXT item is about to appear, not immediately
-        // -- the last item never gets struck (nothing replaces it, it's the
-        // one the section leaves the viewer on).
-        if (index < PAIN_POINTS.length - 1) {
-          timeline.fromTo(strike, { scaleX: 0 }, { scaleX: 1, duration: slice * 0.3, ease: "none" }, start + slice * 0.6);
-        }
       });
     }, sectionRef);
 
@@ -59,26 +58,31 @@ export function OldWay() {
 
   return (
     <section ref={sectionRef} className="relative flex min-h-screen flex-col items-center justify-center gap-6 px-6">
-      <p className="mb-4 text-xs uppercase tracking-widest text-muted-foreground">the old way</p>
-      <div className="flex flex-col items-start gap-5">
-        {PAIN_POINTS.map((point, index) => (
-          <div
-            key={point}
-            ref={element => {
-              itemRefs.current[index] = element;
-            }}
-            className="relative text-3xl font-semibold text-foreground opacity-0 sm:text-5xl"
-          >
-            {point}
-            <span
+      <div className="mx-auto w-full max-w-3xl">
+        <p className="mb-4 text-xs uppercase tracking-widest text-muted-foreground">the old way</p>
+
+        <div className="overflow-hidden rounded-xl border border-border bg-card">
+          {PAIN_POINTS.map((point, index) => (
+            <div
+              key={point.label}
               ref={element => {
-                strikeRefs.current[index] = element;
+                rowRefs.current[index] = element;
               }}
-              className="absolute left-0 top-1/2 h-[3px] w-full origin-left scale-x-0 bg-danger"
-              aria-hidden="true"
-            />
-          </div>
-        ))}
+              className="flex items-center gap-4 border-b border-border px-5 py-5 transition-colors duration-150 ease-[var(--ease-out)] last:border-b-0 sm:gap-6 sm:px-6"
+            >
+              <span className="font-mono text-sm text-muted-foreground">{String(index + 1).padStart(2, "0")}</span>
+              <div className="min-w-0 flex-1">
+                <p data-row-label className="text-lg font-semibold text-foreground transition-colors duration-150 ease-[var(--ease-out)] sm:text-xl">
+                  {point.label}
+                </p>
+                <p className="mt-1 text-sm text-muted-foreground">{point.description}</p>
+              </div>
+              <span className="shrink-0 rounded-full border border-danger/40 bg-danger/10 px-2.5 py-1 text-[10px] font-medium uppercase tracking-wide text-danger">
+                Manual
+              </span>
+            </div>
+          ))}
+        </div>
       </div>
     </section>
   );
