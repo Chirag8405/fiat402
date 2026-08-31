@@ -1,12 +1,17 @@
 "use client";
 
 /**
- * Public showcase at "/" -- Phase 1 of the R3F revamp: a single continuous
- * scroll-driven camera journey through 7 placeholder zones (foundation
- * only, no real content yet). Replaces the previous DOM/GSAP stacked-section
+ * Public showcase at "/" -- a single continuous scroll-driven camera
+ * journey through 7 zones. Replaces the previous DOM/GSAP stacked-section
  * scrollytelling (components/showcase/*.tsx, left in place unused as a copy
- * reference for later phases -- see components/showcase-r3f's ScrollProvider
- * for the carried-over Lenis/ScrollTrigger wiring).
+ * reference -- see components/showcase-r3f's ScrollProvider for the
+ * carried-over Lenis/ScrollTrigger wiring).
+ *
+ * Phase 2: zones 0-1 (cold-open, old-way) have real content
+ * (ColdOpenZone/OldWayZone in Scene.tsx); zones 2-6 are still Phase 1's
+ * wireframe placeholders. ScrollHint is the cold-open "scroll" affordance,
+ * rendered as a fixed DOM overlay (not scene-anchored) so it doesn't
+ * perspective-shift the instant scrolling starts -- see ScrollHint.tsx.
  *
  * Zone order matches the original 7 story beats 1:1 (cold-open, old-way,
  * bridge, human-decide, live-proof, code, close) -- see
@@ -42,6 +47,7 @@ import { ScrollProvider } from "../components/showcase-r3f/ScrollProvider";
 import { LoadingScreen } from "../components/showcase-r3f/LoadingScreen";
 import { Scene } from "../components/showcase-r3f/Scene";
 import { FpsMeter } from "../components/showcase-r3f/FpsMeter";
+import { ScrollHint } from "../components/showcase-r3f/ScrollHint";
 
 const VH_PER_ZONE = 120;
 
@@ -51,6 +57,7 @@ export default function ShowcasePage() {
       <ScrollProvider />
       <LoadingScreen />
       <div className="scroll-progress-bar" aria-hidden="true" />
+      <ScrollHint />
       <div className="fixed inset-0 z-0">
         <Canvas dpr={[1, 2]} gl={{ antialias: true }} camera={{ fov: 50, position: positionCurve.points[0].toArray() }}>
           <Scene />
