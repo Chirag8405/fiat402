@@ -29,7 +29,7 @@ export function CodeBlock({ label, code }: { label: string; code: string }) {
           {copied ? "Copied" : "Copy"}
         </button>
       </div>
-      <pre className="overflow-x-auto p-4 font-mono text-[12px] leading-relaxed text-foreground">{code}</pre>
+      <pre className="whitespace-pre-wrap break-words p-4 font-mono text-[12px] leading-relaxed text-foreground">{code}</pre>
     </div>
   );
 }

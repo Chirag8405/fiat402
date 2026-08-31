@@ -22,6 +22,15 @@
  * the rail) and rendered with `interactive={false}` -- the buttons are
  * visible (so a replay of an AI-hold run reads the same as a live one) but
  * inert, per components/DecisionPanel.tsx's own doc comment.
+ *
+ * Auto-play: most scrolling visitors never click a button, which left three
+ * of four panels showing empty-state copy by default. An IntersectionObserver
+ * on this section fires AgentConsole's `autoRun="researchbot"` the first
+ * time the section is ~30% visible (guarded so it only ever fires once, even
+ * if the visitor scrolls back up and down again) -- the clean-approve run,
+ * since it's the least confusing default to land on unprompted. The three
+ * buttons stay available afterward for anyone who wants to replay a specific
+ * scenario.
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -47,12 +56,29 @@ const EMPTY_DECISION: { deterministic: DeterministicDecision | null; ai: AiAdvis
 export function LiveProof() {
   const replaySource = useMemo(() => buildReplaySource(), []);
   const activeFixtureKeyRef = useRef<FixtureKey | null>(null);
+  const sectionRef = useRef<HTMLElement | null>(null);
 
   const [requestId, setRequestId] = useState<string | null>(null);
   const [events, setEvents] = useState<FiatEvent[]>([]);
   const [decision, setDecision] = useState(EMPTY_DECISION);
   const [headers, setHeaders] = useState<HeadersDisplay>(EMPTY_HEADERS);
   const [stateStepIndex, setStateStepIndex] = useState(0);
+  const [autoRun, setAutoRun] = useState<string | undefined>(undefined);
+
+  useEffect(() => {
+    if (!sectionRef.current) return;
+    const observer = new IntersectionObserver(
+      entries => {
+        if (entries.some(entry => entry.isIntersecting)) {
+          setAutoRun("researchbot");
+          observer.disconnect();
+        }
+      },
+      { threshold: 0.3 },
+    );
+    observer.observe(sectionRef.current);
+    return () => observer.disconnect();
+  }, []);
 
   function handleRunStart(personaKey: string): void {
     activeFixtureKeyRef.current = personaKey as FixtureKey;
@@ -95,7 +121,7 @@ export function LiveProof() {
   const paymentResponsePending = Boolean(requestId) && !isTerminal && Boolean(headers.paymentRequiredHeader);
 
   return (
-    <section className="relative min-h-screen bg-background px-6 py-24">
+    <section ref={sectionRef} className="relative min-h-screen px-6 py-24">
       <div className="mx-auto flex max-w-6xl flex-col gap-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
@@ -109,6 +135,7 @@ export function LiveProof() {
 
         <AgentConsole
           replaySource={replaySource}
+          autoRun={autoRun}
           onRunStart={handleRunStart}
           onHeadersCaptured={handleHeadersCaptured}
           onRunComplete={handleRunComplete}

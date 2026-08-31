@@ -12,12 +12,21 @@
  * Mounted once at the root of app/page.tsx; every section below registers
  * its own ScrollTrigger-driven timeline against the normal document scroll
  * (no per-section Lenis instances).
+ *
+ * Also owns the single document-level scroll-progress ScrollTrigger: writes
+ * `--scroll-progress` (0-1 across the FULL page, top to bottom) onto
+ * documentElement on every scroll tick, imperatively (a CSS custom property
+ * write, not React state) so it costs nothing per frame. Two consumers read
+ * it purely via CSS: AmbientBackground.tsx's moving wash, and the fixed
+ * progress bar rendered in app/page.tsx. One shared trigger for both, rather
+ * than each maintaining its own.
  */
 
 import { useEffect, type ReactNode } from "react";
 import gsap from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
 import Lenis from "lenis";
+import { AmbientBackground } from "./AmbientBackground";
 
 gsap.registerPlugin(ScrollTrigger);
 
@@ -44,6 +53,16 @@ export function ScrollProvider({ children }: { children: ReactNode }) {
     // guidance.
     gsap.ticker.lagSmoothing(0);
 
+    const progressTrigger = ScrollTrigger.create({
+      trigger: document.body,
+      start: "top top",
+      end: "bottom bottom",
+      scrub: true,
+      onUpdate: self => {
+        document.documentElement.style.setProperty("--scroll-progress", String(self.progress));
+      },
+    });
+
     // Content below (fixtures, code snippets) can shift layout heights after
     // first paint (font load, hydration) -- one refresh shortly after mount
     // keeps pinned-section trigger points accurate without waiting for a
@@ -54,9 +73,15 @@ export function ScrollProvider({ children }: { children: ReactNode }) {
       clearTimeout(refreshTimer);
       gsap.ticker.remove(onTick);
       lenis.destroy();
+      progressTrigger.kill();
       ScrollTrigger.getAll().forEach(trigger => trigger.kill());
     };
   }, []);
 
-  return <>{children}</>;
+  return (
+    <>
+      <AmbientBackground />
+      {children}
+    </>
+  );
 }

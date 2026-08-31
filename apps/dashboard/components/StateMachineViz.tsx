@@ -234,13 +234,24 @@ export function StateMachineViz({ events, forceIdle = false }: StateMachineVizPr
  * `idle`, all segments unlit) so the first real event reads as the rail
  * lighting up rather than a card materializing from nothing.
  */
+/**
+ * Sizing here (stage min-width, track-segment width, pill padding/font) is
+ * tuned to fit within a half-width card at the lg: 2-col breakpoint (~440px
+ * available at 1024px viewport) and a full-width card on a narrow phone
+ * (~300px available at 390px viewport) WITHOUT relying on `overflow-x-auto`
+ * to actually activate -- measured directly: at the previous sizing this
+ * rail needed ~488px regardless of container, causing real horizontal
+ * scroll both at the 1024px lg: breakpoint (~42px over) and on mobile
+ * (~180px over). `overflow-x-auto` stays on as a safety net for anything
+ * narrower still, not as the primary fit strategy.
+ */
 function Rail({ stages, current, visited }: { stages: Stage[]; current: RequestState | null; visited: Set<RequestState> }) {
   return (
     <div className="flex items-start gap-0 overflow-x-auto pb-1">
       {stages.map((stage, stageIndex) => (
         <div key={stage.label} className="flex items-start">
-          <div className="flex min-w-[92px] flex-col items-center gap-2">
-            <div className="text-center text-[10px] uppercase tracking-wide text-muted-foreground">{stage.label}</div>
+          <div className="flex min-w-[52px] flex-col items-center gap-2 sm:min-w-[76px]">
+            <div className="text-center text-[9px] uppercase tracking-wide text-muted-foreground sm:text-[10px]">{stage.label}</div>
             <div className="flex flex-col items-center gap-1.5">
               {stage.states.map(({ state, label }) => {
                 const status: NodeStatus = state === current ? "current" : visited.has(state) ? "visited" : "idle";
@@ -248,7 +259,7 @@ function Rail({ stages, current, visited }: { stages: Stage[]; current: RequestS
                   <div
                     key={state}
                     className={cn(
-                      "rounded-full border px-3 py-1 text-center text-xs font-medium",
+                      "rounded-full border px-2 py-0.5 text-center text-[10px] font-medium sm:px-3 sm:py-1 sm:text-xs",
                       "transition-[transform,background-color,color,border-color,box-shadow] duration-[180ms] ease-[var(--ease-out)]",
                       nodeTone(status),
                     )}
@@ -260,7 +271,7 @@ function Rail({ stages, current, visited }: { stages: Stage[]; current: RequestS
             </div>
           </div>
           {stageIndex < stages.length - 1 && (
-            <div className="relative mt-4 h-0.5 w-10 shrink-0 overflow-hidden rounded-full bg-border">
+            <div className="relative mt-4 h-0.5 w-2 shrink-0 overflow-hidden rounded-full bg-border sm:w-6">
               <div
                 className={cn(
                   "absolute inset-0 origin-left rounded-full bg-success",

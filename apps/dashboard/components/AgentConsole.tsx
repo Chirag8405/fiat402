@@ -26,7 +26,7 @@
  * on the same lifecycle instead of a separate/drifting one.
  */
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "./ui/card";
 import { cn } from "../lib/utils";
 
@@ -111,9 +111,17 @@ export interface AgentConsoleProps {
    * /api/simulate -- see that file's top comment.
    */
   replaySource?: ReplaySource;
+  /**
+   * When set, `run(autoRun)` fires once automatically on mount (guarded so
+   * it never re-fires on a re-render or a prop-identity change) -- lets a
+   * caller auto-play a run rather than waiting for a button click. Default
+   * (unset) preserves today's exact live /console behavior, where nothing
+   * runs until a button is clicked.
+   */
+  autoRun?: string;
 }
 
-export function AgentConsole({ onRunStart, onHeadersCaptured, onRunComplete, replaySource }: AgentConsoleProps) {
+export function AgentConsole({ onRunStart, onHeadersCaptured, onRunComplete, replaySource, autoRun }: AgentConsoleProps) {
   const [activePersona, setActivePersona] = useState<string | null>(null);
   const [lines, setLines] = useState<ConsoleLine[]>([]);
   const [status, setStatus] = useState<RunStatus>("idle");
@@ -121,6 +129,7 @@ export function AgentConsole({ onRunStart, onHeadersCaptured, onRunComplete, rep
   // after a newer run has started -- only the latest run's reader is allowed
   // to touch state.
   const runIdRef = useRef(0);
+  const hasAutoRunRef = useRef(false);
 
   async function runReplay(personaKey: string, source: ReplaySource): Promise<void> {
     const runId = ++runIdRef.current;
@@ -219,6 +228,16 @@ export function AgentConsole({ onRunStart, onHeadersCaptured, onRunComplete, rep
   function run(personaKey: string): Promise<void> {
     return replaySource ? runReplay(personaKey, replaySource) : runLive(personaKey);
   }
+
+  useEffect(() => {
+    if (!autoRun || hasAutoRunRef.current) return;
+    hasAutoRunRef.current = true;
+    void run(autoRun);
+    // run/runReplay/runLive close over replaySource/callbacks by reference
+    // each render; only autoRun's PRESENCE (not identity/callback churn)
+    // should ever trigger this, per the ref guard above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoRun]);
 
   const personas = replaySource ? replaySource.personas : PERSONAS;
 

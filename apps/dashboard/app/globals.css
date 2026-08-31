@@ -81,6 +81,55 @@ body {
   animation: blink-cursor 1s step-end infinite;
 }
 
+/* components/showcase/AmbientBackground.tsx -- the page's single background
+   painter (every section drops its own bg-background so this shows through
+   in the gaps between them, see app/page.tsx). Fixed, z-index below all
+   section content, pointer-events none throughout. --scroll-progress is
+   written by ScrollProvider.tsx's document-level ScrollTrigger. */
+.ambient-background {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-color: var(--color-background);
+}
+
+.ambient-background::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(circle, var(--color-border) 1px, transparent 1px);
+  background-size: 28px 28px;
+  opacity: 0.35;
+}
+
+.ambient-background::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    720px circle at 50% calc(var(--scroll-progress, 0) * 100%),
+    color-mix(in srgb, var(--color-primary) 8%, transparent),
+    transparent 70%
+  );
+}
+
+/* app/page.tsx's fixed scroll-progress bar -- same --scroll-progress
+   variable as the ambient wash above, consumed via a scaleX transform
+   (GPU-cheap, no layout) rather than animating width. */
+.scroll-progress-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  z-index: 50;
+  background: var(--color-primary);
+  transform-origin: left;
+  transform: scaleX(var(--scroll-progress, 0));
+  pointer-events: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .live-pulse {
     animation: none;

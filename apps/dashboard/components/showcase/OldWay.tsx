@@ -27,9 +27,12 @@ export function OldWay() {
         scrollTrigger: {
           trigger: sectionRef.current,
           start: "top top",
-          end: "+=200%",
+          end: "+=140%",
           pin: true,
-          scrub: 1,
+          // scrub: true (not a numeric value) -- avoids stacking GSAP's own
+          // catch-up smoothing on top of Lenis's already-eased scroll
+          // position, see HumanMoment.tsx's top comment for the full reasoning.
+          scrub: true,
         },
       });
 
@@ -55,7 +58,7 @@ export function OldWay() {
   }, []);
 
   return (
-    <section ref={sectionRef} className="relative flex min-h-screen flex-col items-center justify-center gap-6 bg-background px-6">
+    <section ref={sectionRef} className="relative flex min-h-screen flex-col items-center justify-center gap-6 px-6">
       <p className="mb-4 font-mono text-xs uppercase tracking-widest text-muted-foreground">the old way</p>
       <div className="flex flex-col items-start gap-5">
         {PAIN_POINTS.map((point, index) => (

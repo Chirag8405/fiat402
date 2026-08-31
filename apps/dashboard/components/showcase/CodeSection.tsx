@@ -42,8 +42,8 @@ registerUpiScheme(client, {
 
 export function CodeSection() {
   return (
-    <section className="relative bg-background px-6 py-24">
-      <div className="mx-auto flex max-w-4xl flex-col gap-8">
+    <section className="relative px-6 py-24">
+      <div className="mx-auto flex max-w-5xl flex-col gap-8">
         <div>
           <p className="font-mono text-xs uppercase tracking-widest text-muted-foreground">the actual protocol</p>
           <h2 className="mt-1 text-2xl font-semibold text-foreground sm:text-3xl">Two lines, either side</h2>

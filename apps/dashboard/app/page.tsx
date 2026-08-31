@@ -30,7 +30,9 @@ import { Close } from "../components/showcase/Close";
 export default function ShowcasePage() {
   return (
     <ScrollProvider>
-      <main className="bg-background">
+      {/* Driven by --scroll-progress, written by ScrollProvider's document-level ScrollTrigger -- see globals.css's .scroll-progress-bar. */}
+      <div className="scroll-progress-bar" aria-hidden="true" />
+      <main className="relative z-[1]">
         <ColdOpen />
         <OldWay />
         <Bridge />

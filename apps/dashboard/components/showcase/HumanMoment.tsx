@@ -12,6 +12,15 @@
  * not setInterval/setTimeout -- text is sliced by progress and written
  * directly via a ref (imperative DOM write) rather than React state, so this
  * doesn't trigger a re-render on every scroll tick.
+ *
+ * `scrub: true` (not a numeric value like `1`) -- a numeric scrub adds
+ * GSAP's own ~1s catch-up tween on top of Lenis's already-eased scroll
+ * position (ScrollProvider.tsx), and that stacked smoothing is what made the
+ * typewriter visibly keep advancing for a couple of seconds after physical
+ * scroll input actually stopped. `scrub: true` snaps directly to whatever
+ * scroll-mapped progress ScrollTrigger currently measures, with no
+ * additional GSAP-side lag -- Lenis is still doing its own (much shorter)
+ * easing, but there's no second layer compounding on top of it.
  */
 
 import { useEffect, useRef } from "react";
@@ -44,9 +53,9 @@ export function HumanMoment() {
         scrollTrigger: {
           trigger: sectionRef.current,
           start: "top top",
-          end: "+=250%",
+          end: "+=160%",
           pin: true,
-          scrub: 1,
+          scrub: true,
           onUpdate: self => {
             const typeProgress = Math.min(self.progress / TYPE_END_PROGRESS, 1);
             const charCount = Math.floor(typeProgress * HUMAN_SUMMARY.length);
@@ -63,7 +72,7 @@ export function HumanMoment() {
   }, []);
 
   return (
-    <section ref={sectionRef} className="relative flex min-h-screen flex-col items-center justify-center gap-10 bg-background px-6">
+    <section ref={sectionRef} className="relative flex min-h-screen flex-col items-center justify-center gap-10 px-6">
       <p className="font-mono text-xs uppercase tracking-widest text-muted-foreground">TravelBot · flagged for review</p>
 
       <p className="max-w-2xl text-center text-xl leading-relaxed text-foreground sm:text-2xl">
