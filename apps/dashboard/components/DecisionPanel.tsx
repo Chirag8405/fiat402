@@ -72,6 +72,15 @@ export interface DecisionPanelProps {
   state: RequestState | null;
   deterministic: DeterministicDecision | null;
   ai: AiAdvisory | null;
+  /**
+   * When false, renders the exact same visual state (including the
+   * Confirm/Decline buttons, so a fixture replay reads identically to a live
+   * run) but those buttons are inert -- no onClick, no fetch to
+   * /api/confirm-gate or /api/decline. Default true preserves today's exact
+   * /console behavior. Added for app/page.tsx's fixture-replay showcase,
+   * which must never call those routes -- see that file's top comment.
+   */
+  interactive?: boolean;
 }
 
 /** Per CLAUDE.md: AI never overrides the deterministic gate. Divergence here just means it added friction the deterministic engine didn't require. */
@@ -96,6 +105,7 @@ function GateActionButton({
   busyLabel,
   doneLabel,
   variant,
+  interactive,
 }: {
   requestId: string;
   endpoint: string;
@@ -103,6 +113,7 @@ function GateActionButton({
   busyLabel: string;
   doneLabel: string;
   variant: "focal" | "secondary";
+  interactive: boolean;
 }) {
   const [phase, setPhase] = useState<GatePhase>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -115,6 +126,7 @@ function GateActionButton({
   }, [requestId]);
 
   async function handleClick(): Promise<void> {
+    if (!interactive) return;
     setPhase("busy");
     setErrorMessage(null);
     try {
@@ -160,7 +172,7 @@ function GateActionButton({
   );
 }
 
-function ConfirmButton({ requestId }: { requestId: string }) {
+function ConfirmButton({ requestId, interactive }: { requestId: string; interactive: boolean }) {
   return (
     <GateActionButton
       requestId={requestId}
@@ -169,11 +181,12 @@ function ConfirmButton({ requestId }: { requestId: string }) {
       busyLabel="Confirming…"
       doneLabel="Confirmed — waiting for payment"
       variant="focal"
+      interactive={interactive}
     />
   );
 }
 
-function DeclineButton({ requestId }: { requestId: string }) {
+function DeclineButton({ requestId, interactive }: { requestId: string; interactive: boolean }) {
   return (
     <GateActionButton
       requestId={requestId}
@@ -182,11 +195,12 @@ function DeclineButton({ requestId }: { requestId: string }) {
       busyLabel="Declining…"
       doneLabel="Declined"
       variant="secondary"
+      interactive={interactive}
     />
   );
 }
 
-export function DecisionPanel({ requestId, state, deterministic, ai }: DecisionPanelProps) {
+export function DecisionPanel({ requestId, state, deterministic, ai, interactive = true }: DecisionPanelProps) {
   const divergent = deterministic && ai ? isDivergent(deterministic, ai) : false;
   const failClosed = ai?.provider === "fail-closed";
   const normalizedRecommendation = ai?.recommendation === "hold" || ai?.recommendation === "approve" ? ai.recommendation : undefined;
@@ -260,15 +274,15 @@ export function DecisionPanel({ requestId, state, deterministic, ai }: DecisionP
                   directly.
                 </p>
                 <div className="flex items-center gap-2">
-                  <ConfirmButton requestId={requestId} />
-                  <DeclineButton requestId={requestId} />
+                  <ConfirmButton requestId={requestId} interactive={interactive} />
+                  <DeclineButton requestId={requestId} interactive={interactive} />
                 </div>
               </div>
             )}
             {pending && !pendingHold && requestId && (
               <div className="col-span-2 flex flex-col items-center gap-2 border-t border-border pt-3">
                 <p className="text-center text-[11px] text-muted-foreground">Waiting on the payer -- decline to stop this instead of waiting it out.</p>
-                <DeclineButton requestId={requestId} />
+                <DeclineButton requestId={requestId} interactive={interactive} />
               </div>
             )}
             {divergent && !pendingHold && (

@@ -32,7 +32,7 @@ import { cn } from "../lib/utils";
 
 type LineKind = "info" | "success" | "error";
 
-interface ConsoleLine {
+export interface ConsoleLine {
   line: string;
   kind: LineKind;
 }
@@ -78,14 +78,42 @@ function lineTone(kind: LineKind): string {
   return "text-muted-foreground";
 }
 
-export interface AgentConsoleProps {
-  /** Fires at the same moment this component resets its own `lines` -- see this file's top comment. */
-  onRunStart?: () => void;
-  /** Fires when the stream's `{kind: "headers", ...}` message is parsed. */
-  onHeadersCaptured?: (headers: CapturedHeaders) => void;
+/**
+ * One step of a fixture replay: a console line to append, paced by `delayMs`
+ * before it appears (relative to the previous step, not absolute) -- lets a
+ * replay source reproduce the real route's stagger (probe -> 402 ->
+ * constructing payload -> headers captured -> handed off) without a real
+ * network round trip driving the timing.
+ */
+export interface ReplayStep {
+  delayMs: number;
+  line: ConsoleLine;
 }
 
-export function AgentConsole({ onRunStart, onHeadersCaptured }: AgentConsoleProps) {
+export interface ReplaySource {
+  personas: { key: string; label: string }[];
+  /** Returns the ordered console lines (with pacing) and the headers to hand to onHeadersCaptured, for the given persona key -- or null if this source has nothing for that persona. */
+  run(personaKey: string): { steps: ReplayStep[]; headers: CapturedHeaders | null } | null;
+}
+
+export interface AgentConsoleProps {
+  /** Fires at the same moment this component resets its own `lines` -- see this file's top comment. `personaKey` is the button that was clicked (additive param -- existing zero-arg call sites are unaffected). */
+  onRunStart?: (personaKey: string) => void;
+  /** Fires when the stream's `{kind: "headers", ...}` message is parsed (or, in replay mode, when the replay source's headers step is reached). */
+  onHeadersCaptured?: (headers: CapturedHeaders) => void;
+  /** Fires once a run finishes, live or replay, regardless of whether headers were ever captured -- the one reliable "this run is over" signal for a caller that needs to reveal something once the whole thing has played out. */
+  onRunComplete?: (status: "done" | "error") => void;
+  /**
+   * When provided, buttons/personas and the run implementation come from
+   * this instead of a real POST to /api/simulate -- no network call is ever
+   * made. Default (unset) preserves today's exact live /console behavior.
+   * Added for app/page.tsx's fixture-replay showcase, which must never call
+   * /api/simulate -- see that file's top comment.
+   */
+  replaySource?: ReplaySource;
+}
+
+export function AgentConsole({ onRunStart, onHeadersCaptured, onRunComplete, replaySource }: AgentConsoleProps) {
   const [activePersona, setActivePersona] = useState<string | null>(null);
   const [lines, setLines] = useState<ConsoleLine[]>([]);
   const [status, setStatus] = useState<RunStatus>("idle");
@@ -94,9 +122,37 @@ export function AgentConsole({ onRunStart, onHeadersCaptured }: AgentConsoleProp
   // to touch state.
   const runIdRef = useRef(0);
 
-  async function run(personaKey: string): Promise<void> {
+  async function runReplay(personaKey: string, source: ReplaySource): Promise<void> {
     const runId = ++runIdRef.current;
-    onRunStart?.();
+    onRunStart?.(personaKey);
+    setActivePersona(personaKey);
+    setLines([]);
+    setStatus("running");
+
+    const result = source.run(personaKey);
+    if (!result) {
+      setLines([{ line: `no replay fixture available for persona "${personaKey}"`, kind: "error" }]);
+      setStatus("error");
+      onRunComplete?.("error");
+      return;
+    }
+
+    let sawError = false;
+    for (const step of result.steps) {
+      if (step.delayMs > 0) await new Promise(resolve => setTimeout(resolve, step.delayMs));
+      if (runIdRef.current !== runId) return;
+      if (step.line.kind === "error") sawError = true;
+      setLines(prev => [...prev, step.line]);
+    }
+    if (runIdRef.current !== runId) return;
+    if (result.headers) onHeadersCaptured?.(result.headers);
+    setStatus(sawError ? "error" : "done");
+    onRunComplete?.(sawError ? "error" : "done");
+  }
+
+  async function runLive(personaKey: string): Promise<void> {
+    const runId = ++runIdRef.current;
+    onRunStart?.(personaKey);
     setActivePersona(personaKey);
     setLines([]);
     setStatus("running");
@@ -113,6 +169,7 @@ export function AgentConsole({ onRunStart, onHeadersCaptured }: AgentConsoleProp
         const body = (await res.json().catch(() => null)) as { error?: string } | null;
         setLines([{ line: body?.error ?? `request failed with status ${res.status}`, kind: "error" }]);
         setStatus("error");
+        onRunComplete?.("error");
         return;
       }
 
@@ -147,23 +204,37 @@ export function AgentConsole({ onRunStart, onHeadersCaptured }: AgentConsoleProp
         }
       }
 
-      if (runIdRef.current === runId) setStatus(sawError ? "error" : "done");
+      if (runIdRef.current === runId) {
+        setStatus(sawError ? "error" : "done");
+        onRunComplete?.(sawError ? "error" : "done");
+      }
     } catch (err) {
       if (runIdRef.current !== runId) return;
       setLines(prev => [...prev, { line: err instanceof Error ? err.message : String(err), kind: "error" }]);
       setStatus("error");
+      onRunComplete?.("error");
     }
   }
+
+  function run(personaKey: string): Promise<void> {
+    return replaySource ? runReplay(personaKey, replaySource) : runLive(personaKey);
+  }
+
+  const personas = replaySource ? replaySource.personas : PERSONAS;
 
   return (
     <Card>
       <CardHeader>
         <CardTitle>Agent console</CardTitle>
-        <CardDescription>Trigger a real agent request -- it hands off to the rail below once it reaches the facilitator.</CardDescription>
+        <CardDescription>
+          {replaySource
+            ? "Replays a captured run -- no live request is sent from this page."
+            : "Trigger a real agent request -- it hands off to the rail below once it reaches the facilitator."}
+        </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
         <div className="flex gap-2">
-          {PERSONAS.map(persona => (
+          {personas.map(persona => (
             <button
               key={persona.key}
               type="button"

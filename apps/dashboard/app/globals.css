@@ -64,11 +64,31 @@ body {
   animation: console-line-in 160ms var(--ease-out);
 }
 
+/* app/page.tsx's cold-open / human-moment beats: a steady terminal-style
+   blink on the trailing cursor character. */
+@keyframes blink-cursor {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+
+.blinking-cursor {
+  animation: blink-cursor 1s step-end infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .live-pulse {
     animation: none;
   }
   .console-line {
+    animation: none;
+  }
+  .blinking-cursor {
     animation: none;
   }
 }
