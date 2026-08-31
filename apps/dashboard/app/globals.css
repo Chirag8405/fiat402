@@ -31,6 +31,26 @@ body {
   font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
 }
 
+/* Showcase page ("/") only -- scoped token overrides + typography, kept out
+   of the shared @theme block above so /console (same root layout, same
+   shared components) stays visually untouched. Tailwind v4 utilities like
+   bg-background/text-foreground/border-border just read these as plain CSS
+   custom properties at paint time, so shadowing them inside this one
+   subtree needs zero utility-class changes anywhere else.
+
+   De-tinted toward true neutral (hue 0, not the shared tokens' hue 240)
+   for the monochrome portfolio register; --color-primary itself is left
+   alone (still shared, still blue) -- the redesign's lever is restrained
+   USE of that accent, not a different accent color. */
+.showcase-page {
+  --color-background: hsl(0 0% 5%);
+  --color-card: hsl(0 0% 7%);
+  --color-border: hsl(0 0% 18%);
+  --color-muted: hsl(0 0% 12%);
+  --color-muted-foreground: hsl(0 0% 62%);
+  font-family: var(--font-sans), ui-sans-serif, system-ui, -apple-system, sans-serif;
+}
+
 @keyframes pulse-ring {
   0% {
     box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-success) 55%, transparent);
@@ -103,13 +123,17 @@ body {
   opacity: 0.35;
 }
 
+/* Kept deliberately near-monochrome (a faint white lift, not the old blue
+   glow) -- still does the same job of killing dead scroll zones by
+   tracking --scroll-progress, just reads as ambient light rather than a
+   color wash, per the monochrome redesign. */
 .ambient-background::after {
   content: "";
   position: absolute;
   inset: 0;
   background: radial-gradient(
     720px circle at 50% calc(var(--scroll-progress, 0) * 100%),
-    color-mix(in srgb, var(--color-primary) 8%, transparent),
+    color-mix(in srgb, white 4%, transparent),
     transparent 70%
   );
 }

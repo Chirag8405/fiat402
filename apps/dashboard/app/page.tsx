@@ -29,18 +29,25 @@ import { Close } from "../components/showcase/Close";
 
 export default function ShowcasePage() {
   return (
-    <ScrollProvider>
-      {/* Driven by --scroll-progress, written by ScrollProvider's document-level ScrollTrigger -- see globals.css's .scroll-progress-bar. */}
-      <div className="scroll-progress-bar" aria-hidden="true" />
-      <main className="relative z-[1]">
-        <ColdOpen />
-        <OldWay />
-        <Bridge />
-        <HumanMoment />
-        <LiveProof />
-        <CodeSection />
-        <Close />
-      </main>
-    </ScrollProvider>
+    // .showcase-page scopes the monochrome-portfolio token overrides and
+    // the Inter (--font-sans) typeface to this page only -- see
+    // globals.css's ".showcase-page" block. /console reuses the same root
+    // layout and several of the same components but is a separate DOM
+    // subtree, so it never picks these up.
+    <div className="showcase-page">
+      <ScrollProvider>
+        {/* Driven by --scroll-progress, written by ScrollProvider's document-level ScrollTrigger -- see globals.css's .scroll-progress-bar. */}
+        <div className="scroll-progress-bar" aria-hidden="true" />
+        <main className="relative z-[1]">
+          <ColdOpen />
+          <OldWay />
+          <Bridge />
+          <HumanMoment />
+          <LiveProof />
+          <CodeSection />
+          <Close />
+        </main>
+      </ScrollProvider>
+    </div>
   );
 }

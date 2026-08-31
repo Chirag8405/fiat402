@@ -15,7 +15,7 @@ const REPO_URL = process.env.NEXT_PUBLIC_REPO_URL;
 export function Close() {
   return (
     <section className="relative flex min-h-[60vh] flex-col items-center justify-center gap-6 px-6 text-center">
-      <p className="font-mono text-xs uppercase tracking-widest text-muted-foreground">fiat402</p>
+      <p className="text-xs uppercase tracking-widest text-muted-foreground">fiat402</p>
       <div className="flex flex-wrap items-center justify-center gap-4 text-sm">
         {REPO_URL ? (
           <a href={REPO_URL} className="text-foreground underline decoration-border underline-offset-4 hover:decoration-foreground">

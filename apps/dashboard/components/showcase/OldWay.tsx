@@ -59,7 +59,7 @@ export function OldWay() {
 
   return (
     <section ref={sectionRef} className="relative flex min-h-screen flex-col items-center justify-center gap-6 px-6">
-      <p className="mb-4 font-mono text-xs uppercase tracking-widest text-muted-foreground">the old way</p>
+      <p className="mb-4 text-xs uppercase tracking-widest text-muted-foreground">the old way</p>
       <div className="flex flex-col items-start gap-5">
         {PAIN_POINTS.map((point, index) => (
           <div

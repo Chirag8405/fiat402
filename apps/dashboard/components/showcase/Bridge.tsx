@@ -123,13 +123,13 @@ export function Bridge() {
   return (
     <section ref={sectionRef} className="relative min-h-screen overflow-hidden">
       <div className="pointer-events-none absolute left-1/2 top-10 -translate-x-1/2 text-center">
-        <p className="font-mono text-xs uppercase tracking-widest text-muted-foreground">raw protocol → rupee-settled payment</p>
+        <p className="text-xs uppercase tracking-widest text-muted-foreground">raw protocol → rupee-settled payment</p>
       </div>
 
       <div ref={trackRef} className="relative h-screen">
         <div ref={wrapperRef} className="absolute top-1/2 w-64 -translate-y-1/2 sm:w-80">
           <div ref={terminalRef} className="absolute inset-0 rounded-lg border border-border bg-card p-4 shadow-lg">
-            <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-primary">PAYMENT-REQUIRED</p>
+            <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-muted-foreground">PAYMENT-REQUIRED</p>
             <pre className="overflow-x-auto font-mono text-[11px] leading-relaxed text-foreground">{SAMPLE_PAYMENT_REQUIRED}</pre>
           </div>
 

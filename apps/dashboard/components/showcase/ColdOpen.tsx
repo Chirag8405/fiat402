@@ -9,8 +9,8 @@
 export function ColdOpen() {
   return (
     <section className="relative flex min-h-screen flex-col items-center justify-center gap-8 overflow-hidden px-6 text-center">
-      <span className="font-mono text-[13rem] font-bold leading-none tracking-tighter text-primary sm:text-[16rem]">402</span>
-      <p className="max-w-xl font-mono text-sm leading-relaxed text-muted-foreground sm:text-base">
+      <span className="text-[13rem] font-semibold leading-none tracking-tighter text-primary sm:text-[16rem]">402</span>
+      <p className="max-w-xl text-sm leading-relaxed text-muted-foreground sm:text-base">
         The internet has had a payment status code since 1997.
         <br />
         Nobody used it until agents needed to

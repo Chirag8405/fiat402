@@ -125,7 +125,7 @@ export function LiveProof() {
       <div className="mx-auto flex max-w-6xl flex-col gap-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <p className="font-mono text-xs uppercase tracking-widest text-muted-foreground">live proof</p>
+            <p className="text-xs uppercase tracking-widest text-muted-foreground">live proof</p>
             <h2 className="mt-1 text-2xl font-semibold text-foreground sm:text-3xl">The real control tower, replayed</h2>
           </div>
           <span className="rounded-full border border-border px-2.5 py-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
