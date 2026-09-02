@@ -213,7 +213,15 @@ export function DecisionPanel({ requestId, state, deterministic, ai, interactive
     <Card>
       <CardHeader>
         <CardTitle>Decision</CardTitle>
-        <CardDescription>{requestId ? `Request: ${requestId}` : "No request in flight"}</CardDescription>
+        <CardDescription>
+          {requestId ? (
+            <>
+              Request: <span className="font-mono">{requestId}</span>
+            </>
+          ) : (
+            "No request in flight"
+          )}
+        </CardDescription>
       </CardHeader>
       <CardContent>
         {!deterministic && !ai ? (
@@ -233,7 +241,9 @@ export function DecisionPanel({ requestId, state, deterministic, ai, interactive
               <div className="text-xs font-medium text-muted-foreground">Deterministic</div>
               {deterministic ? (
                 <>
-                  <Badge variant={deterministic.allowed ? "success" : "danger"}>{deterministic.allowed ? "allowed" : "rejected"}</Badge>
+                  <Badge mono variant={deterministic.allowed ? "success" : "danger"}>
+                    {deterministic.allowed ? "allowed" : "rejected"}
+                  </Badge>
                   {deterministic.reason && <p className="text-xs text-muted-foreground">{deterministic.reason}</p>}
                 </>
               ) : (
@@ -245,7 +255,7 @@ export function DecisionPanel({ requestId, state, deterministic, ai, interactive
               {ai ? (
                 <>
                   <div className="flex flex-wrap items-center gap-1.5">
-                    <Badge variant={ai.recommendation === "approve" ? "success" : ai.recommendation === "hold" ? "warning" : "danger"}>
+                    <Badge mono variant={ai.recommendation === "approve" ? "success" : ai.recommendation === "hold" ? "warning" : "danger"}>
                       {ai.recommendation}
                     </Badge>
                     {ai.semanticMatch !== undefined && (

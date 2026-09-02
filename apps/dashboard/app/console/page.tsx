@@ -508,7 +508,7 @@ export default function DashboardPage() {
   const canShowLast = trail !== null && displayMode === "reset";
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-6xl flex-col gap-6 p-6">
+    <main className="console-page mx-auto flex min-h-screen max-w-6xl flex-col gap-6 p-6">
       <header className="flex items-center justify-between">
         <div>
           <h1 className="text-lg font-semibold">fiat402 control tower</h1>

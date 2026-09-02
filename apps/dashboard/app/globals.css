@@ -51,6 +51,21 @@ body {
   font-family: var(--font-sans), ui-sans-serif, system-ui, -apple-system, sans-serif;
 }
 
+/* /console -- same de-tinted neutral tokens + Inter typography as
+   .showcase-page above, scoped the same way (shadowed CSS custom
+   properties, zero utility-class changes needed anywhere else). Semantic
+   tokens (--color-primary/success/warning/danger) are deliberately NOT
+   overridden here, same as .showcase-page: this is a background/border/
+   type-family shift only, status colors stay exactly as shared today. */
+.console-page {
+  --color-background: hsl(0 0% 5%);
+  --color-card: hsl(0 0% 7%);
+  --color-border: hsl(0 0% 18%);
+  --color-muted: hsl(0 0% 12%);
+  --color-muted-foreground: hsl(0 0% 62%);
+  font-family: var(--font-sans), ui-sans-serif, system-ui, -apple-system, sans-serif;
+}
+
 @keyframes pulse-ring {
   0% {
     box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-success) 55%, transparent);

@@ -103,7 +103,14 @@ export function ReconciliationRecord({
         ) : (
           <div className="grid grid-cols-2 gap-x-4 gap-y-3">
             <Field mono label="Request ID" value={<span className="break-all">{requestId}</span>} />
-            <Field label="Final outcome" value={<Badge variant={finalOutcome === "settled" ? "success" : "danger"}>{finalOutcome}</Badge>} />
+            <Field
+              label="Final outcome"
+              value={
+                <Badge mono variant={finalOutcome === "settled" ? "success" : "danger"}>
+                  {finalOutcome}
+                </Badge>
+              }
+            />
             {finalOutcome === "failed" && <Field mono label="Failure reason" value={failureReason} />}
             <Field mono label="Razorpay payment_id" value={razorpayPaymentId && <span className="break-all">{razorpayPaymentId}</span>} />
             <Field mono label="Payment Link" value={paymentLinkId && <span className="break-all">{paymentLinkId}</span>} />
@@ -112,10 +119,10 @@ export function ReconciliationRecord({
             <Field mono label="Transaction ref" value={extras.txnRef && <span className="break-all">{extras.txnRef}</span>} />
             <Field mono label="Amount (paise)" value={extras.amountPaise} />
             <Field mono label="Pay to" value={extras.payTo && <span className="break-all">{extras.payTo}</span>} />
-            <Field label="Pending at" value={timestamps.pendingAt} />
-            <Field label="Resolved at" value={timestamps.resolvedAt} />
-            <Field label="Settled at" value={timestamps.settledAt} />
-            <Field label="Failed at" value={timestamps.failedAt} />
+            <Field mono label="Pending at" value={timestamps.pendingAt} />
+            <Field mono label="Resolved at" value={timestamps.resolvedAt} />
+            <Field mono label="Settled at" value={timestamps.settledAt} />
+            <Field mono label="Failed at" value={timestamps.failedAt} />
           </div>
         )}
       </CardContent>

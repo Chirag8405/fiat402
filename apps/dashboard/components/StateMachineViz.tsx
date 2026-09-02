@@ -213,7 +213,15 @@ export function StateMachineViz({ events, forceIdle = false }: StateMachineVizPr
     <Card>
       <CardHeader>
         <CardTitle>State machine</CardTitle>
-        <CardDescription>{requestId ? `Request: ${requestId}` : "created → pending → approved|declined|expired → settled|failed"}</CardDescription>
+        <CardDescription>
+          {requestId ? (
+            <>
+              Request: <span className="font-mono">{requestId}</span>
+            </>
+          ) : (
+            "created → pending → approved|declined|expired → settled|failed"
+          )}
+        </CardDescription>
       </CardHeader>
       <CardContent>
         {!requestId && (
@@ -259,7 +267,7 @@ function Rail({ stages, current, visited }: { stages: Stage[]; current: RequestS
                   <div
                     key={state}
                     className={cn(
-                      "rounded-full border px-2 py-0.5 text-center text-[10px] font-medium sm:px-3 sm:py-1 sm:text-xs",
+                      "rounded-full border px-2 py-0.5 text-center font-mono text-[10px] font-medium sm:px-3 sm:py-1 sm:text-xs",
                       "transition-[transform,background-color,color,border-color,box-shadow] duration-[180ms] ease-[var(--ease-out)]",
                       nodeTone(status),
                     )}

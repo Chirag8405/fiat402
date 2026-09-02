@@ -111,7 +111,7 @@ function AcceptsSchemes({ header }: { header: string | null }) {
         const scheme = typeof entry?.scheme === "string" ? entry.scheme : "unknown";
         const network = typeof entry?.network === "string" ? entry.network : "unknown";
         return (
-          <Badge key={i} variant={scheme === "upi" ? "success" : "outline"}>
+          <Badge key={i} mono variant={scheme === "upi" ? "success" : "outline"}>
             {scheme} / {network}
           </Badge>
         );
@@ -133,7 +133,15 @@ export function RawTrafficViewer({
     <Card>
       <CardHeader>
         <CardTitle>Raw x402 traffic</CardTitle>
-        <CardDescription>{requestId ? `Most recent request: ${requestId}` : "No request observed yet"}</CardDescription>
+        <CardDescription>
+          {requestId ? (
+            <>
+              Most recent request: <span className="font-mono">{requestId}</span>
+            </>
+          ) : (
+            "No request observed yet"
+          )}
+        </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
         {!hasAnything ? (

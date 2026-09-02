@@ -29,7 +29,15 @@ export function UpiCollectCard({ requestId, state, paymentLinkId }: UpiCollectCa
     <Card>
       <CardHeader>
         <CardTitle>UPI collect</CardTitle>
-        <CardDescription>{requestId ? `Request: ${requestId}` : "No request in flight"}</CardDescription>
+        <CardDescription>
+          {requestId ? (
+            <>
+              Request: <span className="font-mono">{requestId}</span>
+            </>
+          ) : (
+            "No request in flight"
+          )}
+        </CardDescription>
       </CardHeader>
       <CardContent>
         {!paymentLinkId ? (
@@ -40,7 +48,7 @@ export function UpiCollectCard({ requestId, state, paymentLinkId }: UpiCollectCa
               <QRCodeSVG value={paymentLinkId} size={176} />
             </div>
             <div className="flex flex-col items-center gap-1">
-              <Badge variant={state === "settled" ? "success" : state === "failed" ? "danger" : "warning"}>{state ?? "pending"}</Badge>
+              <Badge mono variant={state === "settled" ? "success" : state === "failed" ? "danger" : "warning"}>{state ?? "pending"}</Badge>
               <code className="max-w-full break-all text-center text-xs text-muted-foreground">{paymentLinkId}</code>
             </div>
           </div>

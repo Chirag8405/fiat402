@@ -18,8 +18,11 @@ const badgeVariants = cva("inline-flex items-center rounded-full border px-2 py-
   },
 });
 
-export interface BadgeProps extends React.HTMLAttributes<HTMLSpanElement>, VariantProps<typeof badgeVariants> {}
+export interface BadgeProps extends React.HTMLAttributes<HTMLSpanElement>, VariantProps<typeof badgeVariants> {
+  /** Appends font-mono -- for badges whose text is a literal protocol/state token (state names, scheme/network) rather than human-phrased copy. Default false preserves every existing call site's sans rendering. */
+  mono?: boolean;
+}
 
-export function Badge({ className, variant, ...props }: BadgeProps) {
-  return <span className={cn(badgeVariants({ variant }), className)} {...props} />;
+export function Badge({ className, variant, mono, ...props }: BadgeProps) {
+  return <span className={cn(badgeVariants({ variant }), mono && "font-mono", className)} {...props} />;
 }
