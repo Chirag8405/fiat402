@@ -120,15 +120,18 @@ long-lived connections or bounded waits of its own.
 
 ## Test suite
 
-59 tests across 8 files, all passing.
+123 tests across 16 files, all passing.
 
-| Package | Tests |
-|---|---|
-| apps/facilitator | 38 |
-| packages/scheme-upi | 15 |
-| apps/merchant | 6 |
+| Package | Tests | Files |
+|---|---|---|
+| apps/facilitator | 64 | 7 |
+| apps/dashboard | 37 | 6 |
+| packages/scheme-upi | 15 | 2 |
+| apps/merchant | 7 | 1 |
 
-Run with `pnpm test` inside each package (`apps/facilitator`, `packages/scheme-upi`, `apps/merchant`) — there is no unified root test command.
+`x402-upi-client` has no automated test suite — it ships only a manual demo runner (`pnpm demo`, i.e. `tsx test/demo.ts`), not counted above.
+
+Run with `pnpm test` inside each package (`apps/facilitator`, `apps/dashboard`, `packages/scheme-upi`, `apps/merchant`) — there is no unified root test command.
 
 ## Track
 
