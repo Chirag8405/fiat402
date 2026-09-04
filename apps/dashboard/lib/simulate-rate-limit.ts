@@ -19,7 +19,7 @@ import { redisClient } from "./redis";
 
 const RATE_LIMIT_KEY = "fiat402:demo:simulate-limit";
 const WINDOW_SECONDS = 60 * 60;
-const MAX_TRIGGERS_PER_WINDOW = 5;
+const MAX_TRIGGERS_PER_WINDOW = 30; // temporarily raised for pitch video recording -- lower back to 5 afterward
 
 export interface RateLimitResult {
   allowed: boolean;
