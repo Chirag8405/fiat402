@@ -377,7 +377,7 @@ function extractDescription(requirements: PaymentRequirements | undefined): stri
  * route below executes — extracted so an in-process caller (the merchant
  * resource server's self-facilitation middleware) can call it directly as a
  * function, per the self-facilitation pattern in
- * x402-reference/examples/typescript/servers/self-facilitation/README.md:
+ * https://github.com/x402-foundation/x402/blob/230e6a9a7eebce22c911a0687d6f4e6d1ac019f7/examples/typescript/servers/self-facilitation/README.md:
  * no HTTP hop within the same process, no second Express instance.
  */
 export async function verifyPayment(

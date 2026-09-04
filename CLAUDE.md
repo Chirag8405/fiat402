@@ -2,6 +2,8 @@ What this is
 fiat402 is a standalone x402 facilitator adding a upi payment scheme settled via Razorpay, using the self-facilitation pattern from x402-foundation/x402. We are NOT modifying the upstream repo. We build a standalone facilitator speaking its standard interface with our own scheme: "upi" / network: "upi:in" pair.
 The absolute rule
 Before writing any module touching x402 wire format, facilitator interface shapes, or client SDK usage: read the referenced file(s) in x402-reference/. If a field name or interface shape is unclear, re-read the file. Do not invent field names from training data.
+
+Note: x402-reference/ is a local-only checkout of x402-foundation/x402 (Apache-2.0) used during development for exactly this purpose -- it is not committed to this repo (see README.md's "Built against" note and .gitignore). If you're continuing development and don't have it locally, clone https://github.com/x402-foundation/x402 at commit 230e6a9a7eebce22c911a0687d6f4e6d1ac019f7 (2026-08-21) into x402-reference/ at the repo root to match every path referenced below and elsewhere in this codebase's comments.
 x402 v2 wire format (confirmed field names)
 Transport:
 

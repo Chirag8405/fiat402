@@ -3,15 +3,17 @@
  *
  * Field names on PaymentRequirements mirror x402-specification-v2.md section 5.1.2
  * exactly (scheme, network, amount, asset, payTo, maxTimeoutSeconds, extra) -- see
- * fiat402/x402-reference/specs/x402-specification-v2.md lines 108-130. Do not rename
+ * https://github.com/x402-foundation/x402/blob/230e6a9a7eebce22c911a0687d6f4e6d1ac019f7/specs/x402-specification-v2.md#L108-L130
+ * (x402-foundation/x402, commit 230e6a9a, 2026-08-21 -- the exact spec version this
+ * scheme was built against; see README.md's "Built against" note). Do not rename
  * these fields; other modules (state-machine.ts, the /verify and /settle handlers)
  * read requirements objects by these exact keys.
  *
  * The base PaymentRequirements/PaymentPayload/SchemeNetworkClient shapes are re-used
  * from @x402/core/types (published package, x402-foundation/x402 typescript/packages/core).
  * Confirmed from typescript/packages/core/src/types/payments.ts and
- * typescript/packages/core/src/types/mechanisms.ts in that repo, since this checkout's
- * x402-reference/typescript only contains workspace config files, not package sources.
+ * typescript/packages/core/src/types/mechanisms.ts in that repo at the same pinned
+ * commit above.
  */
 
 import type {
@@ -59,7 +61,8 @@ export interface UpiPaymentRequirements extends Omit<PaymentRequirements, "schem
  * PaymentPayload.payload for scheme "upi".
  *
  * Unlike exact/EVM (spec 5.2.2: `signature` + an EIP-3009 `authorization` object,
- * see also x402-reference/specs/schemes/exact/scheme_exact.md), there is no
+ * see also https://github.com/x402-foundation/x402/blob/230e6a9a7eebce22c911a0687d6f4e6d1ac019f7/specs/schemes/exact/scheme_exact.md),
+ * there is no
  * client-side cryptographic authorization step here. This is a deliberate
  * protocol-level divergence, not a missing feature: the UPI collect flow requires
  * the payer to approve the payment inside their own UPI app, on their own device,

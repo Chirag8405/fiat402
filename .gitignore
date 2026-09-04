@@ -29,3 +29,9 @@ coverage/
 
 # Logs
 *.log
+
+# Vendored x402 protocol reference material (Apache-2.0, x402-foundation/x402)
+# -- kept locally for development, not shipped as part of this repo. See the
+# "Built against" note in README.md for the exact upstream commit it was
+# pulled from.
+x402-reference/

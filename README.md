@@ -52,6 +52,8 @@ sequenceDiagram
 
 `UpiSchemeClient` implements `SchemeNetworkClient` from `@x402/core` — the same interface `ExactEvmScheme` implements — and `registerUpiScheme(client, options)` registers it via `client.register("upi:in", new UpiSchemeClient(options))`, mirroring `registerExactEvmScheme` from `@x402/evm`. `x402Client` itself is untouched: no fork, no patch, no forked payment-selection logic. `upi` sits in a `PaymentRequirements`' `accepts` array exactly the way `exact` does; a client that registers both schemes lets `x402Client` pick whichever one the server actually accepts. The one deliberate divergence is in `createPaymentPayload`: instead of producing a cryptographic signature, it builds a `UpiPaymentPayload` — `{ payerVpa?: string, txnRef?: string }` — because UPI collect has no client-side key. The payer authorizes the transfer out-of-band, on their own device, and the facilitator learns that happened from Razorpay's `payment.captured` webhook, not from anything returned by this method.
 
+*Built against [x402-foundation/x402](https://github.com/x402-foundation/x402) at commit [`230e6a9a`](https://github.com/x402-foundation/x402/commit/230e6a9a7eebce22c911a0687d6f4e6d1ac019f7) (2026-08-21), Apache-2.0 licensed. That reference checkout isn't vendored in this repo — see the License section below — so it's kept as local development material and pinned here for traceability instead.*
+
 ## Architecture
 
 | Component | Stack | Responsibility |
@@ -133,3 +135,9 @@ Run with `pnpm test` inside each package (`apps/facilitator`, `packages/scheme-u
 Razorpay AI Buildathon 2026 — Track 01: AI Growth & Agentic Commerce.
 
 fiat402 lets AI agents autonomously pay for resources over India's dominant payment rail without requiring a crypto wallet, a pre-existing merchant account, or human approval at the agent level.
+
+## License
+
+fiat402 is licensed under the [MIT License](./LICENSE).
+
+This repo does not vendor any x402-foundation/x402 source — see the "Built against" note above for the exact upstream commit fiat402 was developed against, which remains Apache-2.0 licensed under its own repo.

@@ -15,7 +15,7 @@ atomic unit).
 
 ## Payment Flow
 
-`exact` (see [scheme_exact.md](../x402-reference/specs/schemes/exact/scheme_exact.md)) uses the
+`exact` (see [scheme_exact.md](https://github.com/x402-foundation/x402/blob/230e6a9a7eebce22c911a0687d6f4e6d1ac019f7/specs/schemes/exact/scheme_exact.md)) uses the
 `authorization` payment flow by default: the client produces a signed authorization, the
 facilitator verifies it, the resource executes, then the facilitator settles by submitting the
 pre-authorized transfer on-chain. That flow assumes settlement is near-instant once verification

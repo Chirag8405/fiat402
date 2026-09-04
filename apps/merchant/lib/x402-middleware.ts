@@ -5,8 +5,9 @@
  * Field names and header shapes follow x402-specification-v2.md section 5.1
  * (PaymentRequired / PaymentRequirements) and section 5.3 (SettlementResponse),
  * and the HTTP transport's exact header mechanics in
- * x402-reference/specs/transports-v2/http.md ("Payment Required Signaling",
- * "Payment Payload Transmission", "Settlement Response Delivery"):
+ * https://github.com/x402-foundation/x402/blob/230e6a9a7eebce22c911a0687d6f4e6d1ac019f7/specs/transports-v2/http.md
+ * ("Payment Required Signaling", "Payment Payload Transmission", "Settlement
+ * Response Delivery"):
  *   - no/invalid payment  -> 402, base64 PAYMENT-REQUIRED header carrying PaymentRequired
  *   - valid payment       -> 200, base64 PAYMENT-RESPONSE header carrying SettlementResponse
  *
