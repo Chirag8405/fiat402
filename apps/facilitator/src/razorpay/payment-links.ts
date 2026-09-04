@@ -131,7 +131,7 @@ export async function createUpiPaymentLink(
     return { ok: true, paymentLinkId: paymentLink.id, shortUrl: paymentLink.short_url };
   } catch (err) {
     if (isRazorpaySdkErrorLike(err)) {
-      console.log("[razorpay] SDK error:", JSON.stringify(err.error));
+      console.error("[razorpay] SDK error:", JSON.stringify(err.error));
       return {
         ok: false,
         errorCode: err.error.code ?? null,
@@ -139,7 +139,7 @@ export async function createUpiPaymentLink(
       };
     }
     const message = err instanceof Error ? err.message : String(err);
-    console.log("[razorpay] Non-SDK error:", message);
+    console.error("[razorpay] Non-SDK error:", message);
     return { ok: false, errorCode: null, errorDescription: `Razorpay request failed: ${message}` };
   }
 }
@@ -168,7 +168,7 @@ export async function cancelUpiPaymentLink(paymentLinkId: string): Promise<Cance
     return { ok: true };
   } catch (err) {
     if (isRazorpaySdkErrorLike(err)) {
-      console.log("[razorpay] SDK error cancelling Payment Link:", JSON.stringify(err.error));
+      console.error("[razorpay] SDK error cancelling Payment Link:", JSON.stringify(err.error));
       return {
         ok: false,
         errorCode: err.error.code ?? null,
@@ -176,7 +176,7 @@ export async function cancelUpiPaymentLink(paymentLinkId: string): Promise<Cance
       };
     }
     const message = err instanceof Error ? err.message : String(err);
-    console.log("[razorpay] Non-SDK error cancelling Payment Link:", message);
+    console.error("[razorpay] Non-SDK error cancelling Payment Link:", message);
     return { ok: false, errorCode: null, errorDescription: `Razorpay request failed: ${message}` };
   }
 }

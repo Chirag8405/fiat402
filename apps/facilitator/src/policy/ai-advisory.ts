@@ -242,7 +242,6 @@ async function callGemini(prompt: string, fetchImpl: typeof fetch): Promise<Pars
     throw new Error("Gemini response missing text content");
   }
 
-  console.log("[ai-advisory] Gemini raw response:", text);
   const parsed = parseRecommendation(text);
   if (!parsed) {
     throw new Error("Gemini response was not parseable into hold/proceed");
@@ -294,7 +293,6 @@ async function callGroq(prompt: string, fetchImpl: typeof fetch): Promise<Parsed
     throw new Error("Groq response missing message content");
   }
 
-  console.log("[ai-advisory] Groq raw response:", text);
   const parsed = parseRecommendation(text);
   if (!parsed) {
     throw new Error("Groq response was not parseable into hold/proceed");
@@ -325,16 +323,14 @@ export async function getAdvisoryRecommendation(
     const { recommendation, semanticMatch, reasoning, humanSummary } = await callGemini(prompt, fetchImpl);
     return { recommendation, semanticMatch, reasoning, humanSummary, provider: "gemini" };
   } catch (err) {
-    console.log("[ai-advisory] Gemini failed:", err);
-    // Fall through to Groq on any Gemini failure.
+    console.error("[ai-advisory] Gemini failed, falling back to Groq:", err);
   }
 
   try {
     const { recommendation, semanticMatch, reasoning, humanSummary } = await callGroq(prompt, fetchImpl);
     return { recommendation, semanticMatch, reasoning, humanSummary, provider: "groq" };
   } catch (err) {
-      console.log("[ai-advisory] Groq failed:", err);
-    // Fall through to fail-closed on any Groq failure.
+    console.error("[ai-advisory] Groq failed, falling back to fail-closed hold:", err);
   }
 
   return {

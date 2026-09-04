@@ -331,8 +331,13 @@ describe("getAdvisoryRecommendation", () => {
     });
     const context: AdvisoryContext = { fetchImpl: fetchImpl as unknown as typeof fetch };
 
+    // TIMEOUT_MS in ../src/policy/ai-advisory.ts is 15000ms (raised from an
+    // initial 5000ms — see that file's git history — to cut down on
+    // false-positive fail-closed holds from Gemini's real-world latency).
+    // Advance past that, not the old 5000ms value, so this test exercises
+    // the actual configured timeout rather than a stale one.
     const resultPromise = getAdvisoryRecommendation(requirements, payload, context);
-    await vi.advanceTimersByTimeAsync(5000);
+    await vi.advanceTimersByTimeAsync(15000);
     const result = await resultPromise;
 
     expect(result.recommendation).toBe("hold");
