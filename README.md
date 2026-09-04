@@ -139,6 +139,39 @@ Razorpay AI Buildathon 2026 — Track 01: AI Growth & Agentic Commerce.
 
 fiat402 lets AI agents autonomously pay for resources over India's dominant payment rail without requiring a crypto wallet, a pre-existing merchant account, or human approval at the agent level.
 
+## How this maps to the judging criteria
+
+**Problem taste.** x402 today only carries EVM/SVM crypto rails, which
+locks out India's dominant payment method — UPI processes more transaction
+volume than any card network in the country. fiat402 adds `upi` as a
+first-class scheme, not a workaround, so any merchant already exposing an
+x402-gated resource can accept UPI without a bespoke integration or forking
+the protocol's core client.
+
+**AI judgment & guardrails.** The AI advisory layer (Gemini 2.5 Flash,
+falling back to Groq's gpt-oss-120b) never has enforcement power. It returns
+`humanSummary` and `semanticMatch` — advisory fields only — and sits
+*downstream* of a deterministic policy engine that runs first: a hard amount
+ceiling, a merchant allowlist, and a velocity limit, none of which the AI
+layer can override. If both AI providers fail, the system fails closed —
+the human UPI approval step and the policy engine still gate every payment
+regardless of AI availability.
+
+**Graceful failure recovery.** The Redis pub/sub deserialization bug (an
+already-parsed object being passed to `JSON.parse`, silently swallowed by
+an empty catch block) took down `awaitResolution` in production despite
+every state transition firing correctly — it's documented in
+`ws.ts`'s doc comments as a design constraint, not scrubbed from
+history. The bounded-wait facilitator handles Razorpay's actual failure
+modes directly: a payer can decline a Payment Link and then retry inside
+the UPI app, firing `payment.failed` followed by a later `payment.captured`
+for the same link — the facilitator stays subscribed rather than polling
+so it doesn't miss that late approval. If a webhook is dropped entirely,
+a reconciliation record in Postgres is the fallback path. 123 tests across
+4 packages currently pass; no lint/format tooling is configured in any
+package (documented in CONTRIBUTING.md as a known scope trade-off, not an
+oversight).
+
 ## License
 
 fiat402 is licensed under the [MIT License](./LICENSE).
